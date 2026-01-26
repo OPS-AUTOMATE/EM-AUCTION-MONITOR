@@ -1,19 +1,24 @@
 import asyncio
 from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
 import logging
 import re
 from datetime import datetime
 import pytz
 import os
 
+# Try-except for stealth to avoid hard crash if package version differs
+try:
+    from playwright_stealth import stealth_async
+except ImportError:
+    stealth_async = None
+
 logger = logging.getLogger(__name__)
 
 async def scrape_gsa(url: str):
     """
-    Precision GSA Scraper (V2.5).
-    Includes Stealth Mode to bypass server-side bot detection.
-    Added Debug Screenshotting for remote troubleshooting.
+    Precision GSA Scraper (V2.6).
+    Fixed Stealth Import for Python 3.12 compatibility.
+    Dynamic detection of 'Item Name' and 'Location' blocks.
     """
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -26,39 +31,36 @@ async def scrape_gsa(url: str):
         )
         page = await context.new_page()
         
-        # ACTIVATE STEALTH MODE
-        await stealth_async(page)
+        # ACTIVATE STEALTH MODE IF AVAILABLE
+        if stealth_async:
+            await stealth_async(page)
         
         try:
-            logger.info(f"[GSA] V2.5 Stealth Monitoring: {url}")
-            
-            # Go to page
+            logger.info(f"[GSA] V2.6 Monitoring: {url}")
             await page.goto(url, wait_until="domcontentloaded", timeout=60000)
             
-            # Wait for content with a shorter, more specific timeout
-            # We look for the common labels in the GSA UI
+            # Wait for content
             try:
-                await page.wait_for_selector(".ppms-details-container, text=Closing Time", timeout=20000)
-                await asyncio.sleep(5) # Allow dynamic prices to load
+                # GSA often takes 5-10 seconds to fully hydrate the React state
+                await page.wait_for_selector("text=Item Name", timeout=25000)
+                await asyncio.sleep(10) 
             except Exception:
-                # DEBUG: Save screenshot to the current directory if it fails
-                shot_path = f"debug_gsa_{int(datetime.now().timestamp())}.png"
-                await page.screenshot(path=shot_path)
-                logger.warning(f"[GSA] Page failed to render correctly. Screenshot saved to: {shot_path}")
+                logger.warning(f"[GSA] Element timeout on {url}. Proceeding with raw capture.")
 
-            full_text = await page.content()
-            # Convert HTML to flat text for easier regex
+            # Get the body text - usually more reliable for regex on GSA Dynamic pages
             inner_text = await page.inner_text("body")
 
             # --- 1. Extraction ---
             item_name = "Unknown GSA Item"
             city, state = "Unknown", "Unknown"
             
-            # Extract Name (Using broad search)
-            nm = re.search(r"Item Name\s*:\s*(.*?)\n", inner_text, re.I)
-            if nm: item_name = nm.group(1).replace("Sale Lot Number", "").strip()
+            # Name Extraction (Catching the split line pattern)
+            nm = re.search(r"Item Name\s*:\s*(.*?)(?:\n|$)", inner_text, re.I)
+            if nm:
+                # Remove "Sale Lot Number" if it got caught in the same line
+                item_name = nm.group(1).split("Sale Lot Number")[0].strip()
             
-            # Extract Location
+            # Location Extraction
             loc_match = re.search(r"City,\s*State\s*:\s*(.*?)\s*Closing Time", inner_text, re.DOTALL | re.I)
             if loc_match:
                 loc_parts = loc_match.group(1).strip().split(",")
@@ -75,6 +77,7 @@ async def scrape_gsa(url: str):
 
             # --- 3. Timezone ---
             closing_time_iso = None
+            # GSA Date Format: 01/29/2026 12:00 PM CT
             closing_match = re.search(r"Closing Time:\s*(\d{2}/\d{2}/\d{4}\s*\d{2}:\d{2}\s*[APM]{2})\s*CT", inner_text, re.I)
             if closing_match:
                 try:
@@ -89,7 +92,7 @@ async def scrape_gsa(url: str):
             if parts:
                 time_str = "".join([f"{p[0]}{p[1]} " for p in parts]).strip()
 
-            logger.info(f"[GSA] V2.5 Sync Success: {item_name[:25]}... | Bid: ${current_bid}")
+            logger.info(f"[GSA] V2.6 Sync Result: {item_name[:25]}... | Bid: ${current_bid}")
 
             return {
                 "item_name": item_name.strip(),
