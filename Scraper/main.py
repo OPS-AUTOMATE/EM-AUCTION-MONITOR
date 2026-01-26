@@ -56,18 +56,21 @@ class AuctionBotRunner:
             
             await asyncio.sleep(10)
 
-    async def run(self):
-        logger.info("Starting Auction Bot Engine...")
-        await self.poll_database()
+    async def start(self):
+        try:
+            logger.info("Starting Auction Bot Engine...")
+            await self.poll_database()
+        except asyncio.CancelledError:
+            pass
+        finally:
+            logger.info("Shutdown signal received. Stopping Engine...")
+            self.stop_event.set()
+            await self.manager.stop_all()
+            logger.info("Graceful shutdown complete. Goodbye!")
 
 if __name__ == "__main__":
     runner = AuctionBotRunner()
     try:
-        asyncio.run(runner.run())
+        asyncio.run(runner.start())
     except KeyboardInterrupt:
-        logger.info("Shutdown signal received. Stopping Engine...")
-        runner.stop_event.set()
-        # Explicitly stop all tasks
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(runner.manager.stop_all())
-        logger.info("Graceful shutdown complete. Goodbye!")
+        pass
