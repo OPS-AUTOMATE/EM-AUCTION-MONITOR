@@ -1,0 +1,16 @@
+https://gsaauctions.gov/auctions/preview/350387
+https://gsaauctions.gov/auctions/auctions-list?page=1&size=50&searchType=ALL_WORDS&status=active&sort=auctionEndDateSoon,DESC&categoryCodes=150&unCheckedCategoryCodes=10,20,130,40,50,60,70,80,90,100,105,110,120,140,160,170,180,190,200,300&advanced=false
+bid.centurionservice.com
+https://britishmedicalauctions.com/
+https://globalmedauctions.com/
+https://www.bidspotter.com/en-us/for-sale/laboratory-and-pharmaceutical-equipment/medical-equipment/search-filter?&sortTerm=auctionDate
+https://www.dotmed.com/auctions/featured/
+https://www.mazree.com/SignIn?returnUrl=%2Fbuyers%2Fbuyer-dashboard
+https://www.govplanet.com/Medical+Supplies?ct=35#sort=ad%20asc&ct=35&c=3886&sm=0&mf=1
+https://www.directbids.com/auctions?sortBy=ending
+https://surplusmarketplace.com/?%24skip=24&%24limit=24
+https://gcsurplus.ca/mn-eng.cfm?&snc=wfsav&vndsld=0&sc=ach-shop&lci=&sf=ferm-clos&so=ASC&saleType=A&srchtype=&hpcs=6500&hpsr=&kws=&jstp=sly&str=11&sr=1
+https://greenpulse.health/searchresults.html?keywords=&start_date=&end_date=&sales_method=&sharing_option=&city=&radius=&type_deal=&SUBMIT_EVENT=Search
+https://www.troostwijkauctions.com/en/c/medical/medical-equipment/fe4e0c20-9ea9-4852-ab50-84536a251b42
+https://www.publicsurplus.com/sms/browse/cataucs?slth=y&catid=23&page=0&sortBy=timeLeft&sortDesc=N&showaucpct=
+https://www.purplewave.com/search/city%20of%20broken%20arrow?searchType=all&dateType=past&dateRanges=2025%2C2024&zipcodeRange=all&filters=family_category_id%3A450&sortBy=current_bid-desc&perPage=50&grouped=true&viewtype=compressed&page=1

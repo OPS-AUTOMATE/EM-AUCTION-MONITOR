@@ -1,0 +1,82 @@
+To help me create a comprehensive Product Requirement Document (PRD), an Implementation Plan, and recommend the best Tech Stack, please answer the following questions:
+
+1. Target Websites & Data
+Target Sites: Besides gsaauctions.gov, are there other specific sites you have in mind? Each site may require a different scraping strategy.
+Yes, I do have other websites too. ( , )
+
+Data Fields: Based on Sample Dashboard.jpeg, what are the exact fields we need to capture (e.g., Item Name, Current Bid, Time Left, Location, Item ID)?
+I need to fill these fields atleast: (Item Name, Ending{Sorted by ending soon}, Current Bid, Premium%, Link, Bidders, Auction Name, City, State, Clsoing Time, 
+Time Remaining, Serial Number, Website Name)
+
+Scraping Frequency: How "real-time" does it need to be? (e.g., check every 10 seconds, every minute, or only when the user triggers a refresh?)
+I want the data to be exact realtime. If possible make it like whenever the data change for that item. i.e. whenver the bidders number or the bid price or anything change. 
+you may use your own timer to countdown same as in the website. and not check the timer in realtime which will save huge cost.
+
+
+2. User & Access Model
+"Laptops" vs. "Server": When you say "use it on laptops," do you mean each user installs a separate app on their own machine, or is there one central web application that they all log into via their browsers?
+IDK about this situation. suggest me which option is better for my case and usuage.
+
+
+User Isolation: You mentioned the list is "specific to its own user." Should users be able to see each other's items, or should the dashboard be completely private to each teammate?
+No, user's cant see each otehr data. so complete isolation. 
+
+Authentication: Do we need a login system (Email/Password, Google Auth) or is it for an internal network only?
+Well, basically it is for internal use but u can add login system to make it user isolated. otherwise how is it possible to isolate users without login system. is it?
+
+
+3. Concurrency & Performance
+Scale: Roughly how many items might a single user be tracking at once? (e.g., 10, 100, 1000?)
+A single user might be tracking 20/30 items per day. But ther won't be many users. possible maximum 3-5 users total. 
+
+Anti-Bot Protection: Government and auction sites often block frequent automated requests. Do you have a preference for using Proxies or Stealth Browsers (like Playwright/Puppeteer) to avoid being blocked?
+Suggest me the options for this step. Find the kind of safety nets these websites are using and what is the possible bloackage and we will implement a solution against it. 
+
+
+4. Auction Lifecycle & Automation
+Expired Items: You mentioned removing items 3 days/48 hours after expiry. Just to clarify—is the rule exactly 48 hours or 72 hours (3 days)?
+The time when an auction get expired or that item get expired. from that time upnext 48 hours/manual remove button. 
+
+Notifications: Would you like the bot to alert users (e.g., Browser notification, Sound, Email, or Telegram) when a bid changes or an auction is about to end?
+No, not currently, For now the user will be looking it on dashboard screen.
+
+5. Deployment Preference
+Hosting: Are you planning to host the scraper on a cloud provider (AWS, DigitalOcean, Heroku) or run it on a dedicated local machine/server in your office?
+Which one is better option. Choose a logical appraoch for the implementation of this bot and then we can think of what to use. there is no constraint of using anything. i do can buy a server for hosting and i do can run it locally on laptops. whichever option u suggest is suitbale in accordance to reliability, and performance.
+
+
+
+The list of the websites is in the Auction website links.txt file.
+
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+
+
+I have reviewed your requirements and the list of websites. Based on the need for real-time updates across multiple users and the specific auction sites involved (many of which have strong anti-bot protections), I have developed a comprehensive strategy for your bot.
+
+I have created two key documents in your workspace:
+
+PRD.md
+: Outlines the features, data fields, and user flow.
+implementation_plan.md
+: A technical roadmap to build the bot.
+Key Recommendations
+1. Deployment: Cloud Server (VPS) is the Best Choice
+Running this "locally on laptops" would be unreliable for an auction bot. If a laptop is closed, sleeps, or loses internet, you might miss a critical bid change or the final minutes of an auction.
+
+Recommendation: Use a central VPS (like DigitalOcean). It runs 24/7, ensures the scraper is always active, and allows your 3-5 teammates to log in from anywhere (home or office).
+2. Tech Stack: Next.js + Supabase + Python/Playwright
+Next.js: For a "Premium" dashboard that feels like a modern SaaS app.
+Supabase: This is perfect for your "User Isolation" and "Real-time" needs. It handles the login system and automatically pushes new bid data to the dashboard without the user needing to refresh.
+Python + Playwright: These are the "heavy hitters" of scraping. Sites like GSA Auctions and BidSpotter use advanced bot detection. Playwright with stealth plugins is the most reliable way to bypass these.
+3. Anti-Bot Strategy
+Websites like GSA and GovPlanet monitor request frequency.
+
+Solution: We will use a "Stealth Browser" that mimics human mouse movements and scrolling, combined with Residential Proxies (IP addresses that look like normal home users) to avoid being flagged.
+4. Cost-Saving Real-time Logic
+As you suggested, we will not scrape the "Countdown Timer" from the sites every second. Instead:
+
+The bot scrapes the Closing Time once.
+
