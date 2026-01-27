@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  scraper:
+    build:
+      context: ./Scraper
+    restart: always
+    env_file:
+      - ./Scraper/.env
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  dashboard:
+    build:
+      context: ./Dashboard
+    ports:
+      - "3000:3000"
+    restart: always
+    env_file:
+      - ./Dashboard/.env.local
+    depends_on:
+      - scraper
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

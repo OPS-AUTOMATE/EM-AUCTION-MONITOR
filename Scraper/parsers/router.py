@@ -13,19 +13,20 @@ from parsers.gcsurplus import scrape_gcsurplus
 from parsers.greenpulse import scrape_greenpulse
 from parsers.troostwijk import scrape_troostwijk
 from parsers.publicsurplus import scrape_publicsurplus
+from playwright.async_api import Browser
 from parsers.purplewave import scrape_purplewave
 
 logger = logging.getLogger(__name__)
 
-async def get_auction_data(url: str):
+async def get_auction_data(url: str, browser: Browser = None):
     """
     Routes a URL to the appropriate scraper based on the domain.
     """
     try:
         if "gsaauctions.gov" in url:
-            return await scrape_gsa(url)
+            return await scrape_gsa(url, browser=browser)
         elif "bidspotter.com" in url:
-            return await scrape_bidspotter(url)
+            return await scrape_bidspotter(url, browser=browser)
         elif "centurionservice.com" in url:
             return await scrape_centurion(url)
         elif "britishmedicalauctions.com" in url:
@@ -55,57 +56,68 @@ async def get_auction_data(url: str):
         
         # Placeholder for other sites - we will implement a generic 
         # fallback for now and add specific logic as needed.
-        return await scrape_generic(url)
+        return await scrape_generic(url, browser=browser)
         
     except Exception as e:
         logger.error(f"Routing error for {url}: {e}")
         return None
 
-async def scrape_generic(url: str):
+async def scrape_generic(url: str, browser: Browser = None):
     """
     A fallback scraper that uses common patterns for many auction sites.
     """
-    from playwright.async_api import async_playwright
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+    if browser:
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
         )
-        page = await context.new_page()
+        return await _scrape_generic_with_context(url, context)
+    
+    from playwright.async_api import async_playwright
+    async with async_playwright() as p:
+        temp_browser = await p.chromium.launch(headless=True)
+        context = await temp_browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+        )
+        data = await _scrape_generic_with_context(url, context)
+        await temp_browser.close()
+        return data
+
+async def _scrape_generic_with_context(url: str, context):
+    page = await context.new_page()
+    try:
+        # domcontentloaded is more resilient than networkidle
+        await page.goto(url, wait_until="domcontentloaded", timeout=45000)
         
-        try:
-            await page.goto(url, wait_until="networkidle", timeout=30000)
-            
-            # Common patterns for Item Names
-            item_name = "Unknown Item"
-            selectors = ["h1", "h2", ".title", ".product-name", "#itemTitle"]
-            for sel in selectors:
-                if await page.locator(sel).count() > 0:
-                    text = await page.locator(sel).first.inner_text()
-                    if text.strip():
-                        item_name = text.strip()
-                        break
+        # Common patterns for Item Names
+        item_name = "Unknown Item"
+        selectors = ["h1", "h2", ".title", ".product-name", "#itemTitle"]
+        for sel in selectors:
+            if await page.locator(sel).count() > 0:
+                text = await page.locator(sel).first.inner_text()
+                if text.strip():
+                    item_name = text.strip()
+                    break
 
-            # Common patterns for Bids
-            current_bid = 0.0
-            bid_selectors = [".bid-amount", ".current-bid", ".price", ".amount"]
-            for sel in bid_selectors:
-                if await page.locator(sel).count() > 0:
-                    text = await page.locator(sel).first.inner_text()
-                    try:
-                        clean_text = text.replace("$", "").replace(",", "").strip()
-                        current_bid = float(clean_text)
-                        break
-                    except: continue
+        # Common patterns for Bids
+        current_bid = 0.0
+        bid_selectors = [".bid-amount", ".current-bid", ".price", ".amount"]
+        for sel in bid_selectors:
+            if await page.locator(sel).count() > 0:
+                text = await page.locator(sel).first.inner_text()
+                try:
+                    clean_text = text.replace("$", "").replace(",", "").strip()
+                    current_bid = float(clean_text)
+                    break
+                except: continue
 
-            return {
-                "item_name": item_name,
-                "current_bid": current_bid,
-                "website_name": url.split("//")[-1].split("/")[0],
-                "status": "active"
-            }
-        except Exception as e:
-            logger.error(f"Generic scrape failed for {url}: {e}")
-            return None
-        finally:
-            await browser.close()
+        return {
+            "item_name": item_name,
+            "current_bid": current_bid,
+            "website_name": url.split("//")[-1].split("/")[0],
+            "status": "active"
+        }
+    except Exception as e:
+        logger.error(f"Generic scrape failed for {url}: {e}")
+        return None
+    finally:
+        await context.close()

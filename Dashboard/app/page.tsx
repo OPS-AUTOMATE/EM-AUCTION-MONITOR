@@ -81,6 +81,37 @@ export default function Dashboard() {
     }
   }, [])
 
+  const [tick, setTick] = useState(0) // eslint-disable-line @typescript-eslint/no-unused-vars
+
+  useEffect(() => {
+    // Tick is used to trigger re-renders for the live countdown
+    const timer = setInterval(() => setTick(prev => prev + 1), 1000)
+    return () => clearInterval(timer)
+  }, [])
+
+  const getRemainingTime = (closingTime: string | undefined, staticStr: string | undefined) => {
+    if (!closingTime) return staticStr || 'Syncing...'
+    
+    const end = new Date(closingTime).getTime()
+    const now = new Date().getTime()
+    const diff = end - now
+    
+    if (diff <= 0) return 'Ended'
+    
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24))
+    const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
+    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
+    const seconds = Math.floor((diff % (1000 * 60)) / 1000)
+    
+    const parts = []
+    if (days > 0) parts.push(`${days}d`)
+    if (hours > 0 || days > 0) parts.push(`${hours}h`)
+    if (minutes > 0 || hours > 0 || days > 0) parts.push(`${minutes}m`)
+    parts.push(`${seconds}s`)
+    
+    return parts.join(' ')
+  }
+
   useEffect(() => {
     const checkUser = async () => {
       const { data: { session } } = await supabase.auth.getSession()
@@ -296,7 +327,7 @@ export default function Dashboard() {
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.95 }}
                   transition={{ duration: 0.3 }}
-                  className="glass-card auction-card"
+                  className={`glass-card auction-card ${auction.status}`}
                 >
                   <div className="card-top">
                     <div className="status-indicator">
@@ -308,6 +339,7 @@ export default function Dashboard() {
                         onClick={() => toggleStatus(auction.id, auction.status)}
                         className="action-btn" 
                         title={auction.status === 'active' ? 'Pause' : 'Resume'}
+                        disabled={auction.status === 'expired'}
                       >
                         {auction.status === 'active' ? <Pause size={16} /> : <Play size={16} />}
                       </button>
@@ -359,16 +391,19 @@ export default function Dashboard() {
                     <div className="time-group">
                       <div className="time-left">
                         <Clock size={14} />
-                        <span>{auction.time_remaining_str || 'Validating...'}</span>
+                        <span className="tabular-nums">
+                          {getRemainingTime(auction.closing_time, auction.time_remaining_str)}
+                        </span>
                       </div>
                       {auction.closing_time && (
                         <div className="closing-date">
-                           Ends: {new Date(auction.closing_time).toLocaleString(undefined, {
-                              month: 'short',
-                              day: 'numeric',
-                              hour: '2-digit',
-                              minute: '2-digit',
-                              timeZoneName: 'short'
+                           Ends: {new Date(auction.closing_time).toLocaleString('en-US', {
+                               month: 'short',
+                               day: 'numeric',
+                               year: 'numeric',
+                               hour: 'numeric',
+                               minute: '2-digit',
+                               hour12: true
                            })}
                         </div>
                       )}
@@ -587,21 +622,46 @@ export default function Dashboard() {
           grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
           gap: 30px;
         }
-        .glass-card {
-          background: white;
-          border-radius: 28px;
-          padding: 24px;
-          border: 1px solid rgba(0,0,0,0.06);
-          box-shadow: 0 4px 20px rgba(0,0,0,0.02);
-          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-          display: flex;
-          flex-direction: column;
-          gap: 20px;
+        :global(.glass-card.auction-card) {
+          background: rgba(255, 255, 255, 0.95) !important;
+          backdrop-filter: blur(20px) !important;
+          -webkit-backdrop-filter: blur(20px) !important;
+          border-radius: 32px !important;
+          padding: 24px !important;
+          /* Thick 4px White Border */
+          border: 4px solid #ffffff !important;
+          /* Strong contrast shadow to reveal the white border on light background */
+          box-shadow: 
+            0 10px 30px rgba(0, 0, 0, 0.05),
+            0 0 0 2px rgba(0, 0, 0, 0.03), /* Subtle outline for the white border */
+            inset 0 0 0 1px rgba(0, 0, 0, 0.02) !important;
+          transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) !important;
+          display: flex !important;
+          flex-direction: column !important;
+          gap: 20px !important;
+          position: relative !important;
         }
-        .glass-card:hover {
-          transform: translateY(-8px);
-          box-shadow: 0 20px 40px rgba(0,0,0,0.06);
-          border-color: var(--accent-blue);
+        :global(.glass-card.auction-card:hover) {
+          transform: translateY(-10px) !important;
+          background: #ffffff !important;
+          box-shadow: 
+            0 30px 60px rgba(0, 0, 0, 0.1),
+            0 0 0 2px rgba(0, 0, 0, 0.05) !important;
+          border-color: #ffffff !important;
+          z-index: 50 !important;
+        }
+
+        :global(.glass-card.auction-card.expired) {
+          background: rgba(255, 245, 245, 0.98) !important;
+          border: 4px solid #ffdada !important;
+          box-shadow: 
+            0 10px 30px rgba(220, 50, 50, 0.05),
+            0 0 0 2px rgba(220, 50, 50, 0.05) !important;
+        }
+        :global(.glass-card.auction-card.expired:hover) {
+          background: #fffafa !important;
+          box-shadow: 0 30px 60px rgba(220, 50, 50, 0.1) !important;
+          border-color: #ffcaca !important;
         }
 
         .card-top {
@@ -623,6 +683,7 @@ export default function Dashboard() {
         .dot { width: 6px; height: 6px; border-radius: 50%; }
         .dot.active { background: #10b981; box-shadow: 0 0 8px #10b981; }
         .dot.paused { background: #f59e0b; }
+        .dot.expired { background: #94a3b8; }
         .dot.pending { background: #3b82f6; }
 
         .card-actions { display: flex; gap: 8px; }
@@ -639,8 +700,12 @@ export default function Dashboard() {
           color: var(--text-secondary);
           transition: all 0.2s;
         }
-        .action-btn:hover { color: var(--accent-blue); border-color: var(--accent-blue); }
-        .action-btn.delete:hover { color: #f43f5e; border-color: #f43f5e; }
+        .action-btn:disabled {
+          opacity: 0.3;
+          cursor: not-allowed;
+        }
+        .action-btn:hover:not(:disabled) { color: var(--accent-blue); border-color: var(--accent-blue); }
+        .action-btn.delete:hover:not(:disabled) { color: #f43f5e; border-color: #f43f5e; }
 
         .item-title {
           font-size: 16px;

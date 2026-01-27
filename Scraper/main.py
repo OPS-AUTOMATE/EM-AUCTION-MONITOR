@@ -8,6 +8,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from db_client import get_supabase_client
 from manager import ScraperManager
+from lifecycle import run_lifecycle_manager
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -59,6 +60,9 @@ class AuctionBotRunner:
     async def start(self):
         try:
             logger.info("Starting Auction Bot Engine...")
+            # Start the lifecycle manager in the background
+            asyncio.create_task(run_lifecycle_manager())
+            # Start polling database for active items
             await self.poll_database()
         except asyncio.CancelledError:
             pass

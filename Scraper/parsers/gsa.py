@@ -1,107 +1,179 @@
 import asyncio
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, Browser
 import logging
 import re
 from datetime import datetime
 import pytz
 
-# Try various stealth imports to find the correct one for his environment
-try:
-    from playwright_stealth import stealth_async
-except ImportError:
-    try:
-        from playwright_stealth import stealth as stealth_async
-    except ImportError:
-        stealth_async = None
-
 logger = logging.getLogger(__name__)
 
-async def scrape_gsa(url: str):
+async def scrape_gsa(url: str, browser: Browser = None):
     """
-    Detective GSA Scraper (V2.7).
-    Includes deep logging of page content on failure to diagnose server-side blocks.
-    Uses 'networkidle' for more robust loading of React components.
+    Precision GSA Scraper with Timezone Awareness.
+    Supports browser reuse for high-performance concurrent scraping.
     """
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage"]
-        )
-        # Higher range User-Agent to look like a modern Windows 11 laptop
+    if browser:
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            viewport={"width": 1920, "height": 1080},
-            extra_http_headers={"Accept-Language": "en-US,en;q=0.9"}
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            viewport={"width": 1920, "height": 1080}
         )
-        page = await context.new_page()
+        return await _scrape_with_context(url, context, is_shared=True)
+    
+    async with async_playwright() as p:
+        temp_browser = await p.chromium.launch(headless=True)
+        context = await temp_browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            viewport={"width": 1920, "height": 1080}
+        )
+        data = await _scrape_with_context(url, context, is_shared=False)
+        await temp_browser.close()
+        return data
+
+async def _scrape_with_context(url: str, context, is_shared: bool):
+    page = await context.new_page()
         
-        if stealth_async:
-            try:
-                await stealth_async(page)
-            except: pass
+    try:
+        logger.info(f"[GSA] Monitoring Start: {url}")
+        await page.goto(url, wait_until="domcontentloaded", timeout=45000)
         
-        try:
-            logger.info(f"[GSA] V2.7 Monitoring (Stealth): {url}")
-            
-            # Use 'networkidle' - this waits until the page stops loading data
-            await page.goto(url, wait_until="networkidle", timeout=60000)
-            
-            # --- V2.7 DIAGNOSTIC CHECK ---
-            try:
-                await page.wait_for_selector("text=Item Name", timeout=15000)
-            except:
-                title = await page.title()
-                content_snippet = (await page.inner_text("body"))[:200].replace("\n", " ")
-                logger.error(f"[GSA] BLOCK DETECTED? Title: '{title}' | Content: '{content_snippet}'")
+        # Wait for content
+        await page.wait_for_selector(".ppms-details-container", timeout=15000)
+        await asyncio.sleep(6) 
 
-            inner_text = await page.inner_text("body")
+        # Get full text
+        main_block = page.locator(".ppms-details-container").first
+        full_text = await main_block.inner_text() if await main_block.count() > 0 else await page.content()
 
-            # --- Extraction ---
-            item_name = "Unknown GSA Item"
-            current_bid = 0.0
-            
-            nm = re.search(r"Item Name\s*:\s*(.*?)(?:\n|$)", inner_text, re.I)
-            if nm: item_name = nm.group(1).split("Sale Lot Number")[0].strip()
-            
-            pm = re.search(r"Current Bid:\s*\$?\s*([\d,]+\.?\d*)", inner_text, re.I)
-            if pm: current_bid = float(pm.group(1).replace(",", ""))
-
-            # (Rest of extraction logic stays same for reliability)
-            city, state = "Unknown", "Unknown"
-            loc_match = re.search(r"City,\s*State\s*:\s*(.*?)\s*Closing Time", inner_text, re.DOTALL | re.I)
+        # --- 1. Extract Name & Location ---
+        item_name = "Unknown GSA Item"
+        city, state = "Unknown", "Unknown"
+        
+        name_match = re.search(r"Item Name\s*:\s*(.*?)\s*Sale Lot Number", full_text, re.DOTALL | re.I)
+        if name_match:
+            item_name = name_match.group(1).strip()
+        
+        # User specified XPath for city/state
+        xpath_location = "/html/body/div[1]/main/section/div/div/div[1]/div[1]/div/ul/li/div/div[1]/div[1]/ul/li[3]"
+        loc_el = page.locator(f"xpath={xpath_location}")
+        if await loc_el.count() > 0:
+            loc_text = await loc_el.inner_text()
+            # Clean "City, State :" from the text
+            loc_text = loc_text.replace("City, State :", "").strip()
+            if "," in loc_text:
+                parts = loc_text.split(",")
+                city = parts[0].strip()
+                state = parts[1].strip()
+        elif "," in full_text:
+            loc_match = re.search(r"City,\s*State\s*:\s*(.*?)\s*Closing Time", full_text, re.DOTALL | re.I)
             if loc_match:
-                pts = loc_match.group(1).strip().split(",")
-                if len(pts) >= 2: city, state = pts[0].strip(), pts[1].strip()
+                loc_text = loc_match.group(1).strip()
+                if "," in loc_text:
+                    parts = loc_text.split(",")
+                    city = parts[0].strip()
+                    state = parts[1].strip()
 
-            closing_time_iso = None
-            closing_match = re.search(r"Closing Time:\s*(\d{2}/\d{2}/\d{4}\s*\d{2}:\d{2}\s*[APM]{2})\s*CT", inner_text, re.I)
-            if closing_match:
+        # --- 2. Extract Price & Bidders ---
+        current_bid = 0.0
+        total_bidders = 0
+        price_match = re.search(r"Current Bid:\s*\$?\s*([\d,]+\.?\d*)", full_text, re.I)
+        if price_match: current_bid = float(price_match.group(1).replace(",", ""))
+        
+        bidder_match = re.search(r"Bidders:\s*(\d+)", full_text, re.I)
+        if bidder_match: total_bidders = int(bidder_match.group(1))
+
+        # --- 3. Extract Status & Closing Time (User XPaths) ---
+        status = "active"
+        closing_time_iso = None
+
+        # User specified XPaths
+        xpath_status = "/html/body/div[1]/main/section/div/div/div[1]/div[1]/div/ul/li/div/div[2]/div[2]/div/div/ul/li[12]"
+        xpath_closing = "/html/body/div[1]/main/section/div/div/div[1]/div[1]/div/ul/li/div/div[2]/div[2]/div/div/ul/li[11]"
+
+        # Check Status first
+        status_el = page.locator(f"xpath={xpath_status}")
+        if await status_el.count() > 0:
+            status_text = await status_el.inner_text()
+            logger.info(f"[GSA] Status detected: {status_text}")
+            if "closed" in status_text.lower() or "bid closed" in status_text.lower():
+                status = "expired"
+
+        # Check Closing Time via XPath
+        closing_el = page.locator(f"xpath={xpath_closing}")
+        raw_closing_str = None
+        if await closing_el.count() > 0:
+            raw_closing_str = await closing_el.inner_text()
+            # Clean label if present
+            raw_closing_str = raw_closing_str.replace("Closing Time :", "").strip()
+
+        # Fallback to Regex if XPath failed or returned empty
+        if not raw_closing_str:
+            search_target = await page.content()
+            patterns = [
+                r"(?:Closing Time|Ends|Closes|Bid Closes|End Date)\s*[:\-]?\s*(\d{2}/\d{2}/\d{4}\s*\d{2}:\d{2}\s*[APM]{2})\s*CT",
+                r"(\d{2}/\d{2}/\d{4}\s*\d{2}:\d{2}\s*[APM]{2})\s*CT",
+                r"(?:Closing Time|Ends|Closes)\s*[:\-]?\s*(\d{2}/\d{2}/\d{4}\s*\d{2}:\d{2}\s*[APM]{2})"
+            ]
+            for pattern in patterns:
+                m = re.search(pattern, search_target, re.I)
+                if m:
+                    raw_closing_str = m.group(1).strip()
+                    break
+
+        if raw_closing_str:
+            try:
+                # Basic cleaning
+                date_str = raw_closing_str.strip()
+                # Handle lack of space before AM/PM (e.g. 01:15PM -> 01:15 PM)
+                # More robust: find PM/AM and ensure there's a space before it
+                date_str = re.sub(r'(\d{1,2}:\d{2})\s*([APM]{2})', r'\1 \2', date_str, flags=re.I)
+                # Remove any remaining label like "Closing Time :" or "Status"
+                date_str = re.sub(r'[^0-9/: APM]', '', date_str).strip()
+                
+                naive_dt = datetime.strptime(date_str, "%m/%d/%Y %I:%M %p")
+                central = pytz.timezone('US/Central')
+                localized_dt = central.localize(naive_dt)
+                utc_dt = localized_dt.astimezone(pytz.UTC)
+                closing_time_iso = utc_dt.isoformat()
+            except Exception as e:
+                logger.warning(f"[GSA] Final date parse error for '{raw_closing_str}': {e}")
+
+        # --- 4. Extract Remaining Time String ---
+        time_str = "Syncing..."
+        if status == "expired":
+            time_str = "Ended"
+        else:
+            time_match = re.search(r"(?:Ends In|Remaining):?\s*((?:\d+[dhms]\s*)+)", await page.content(), re.I)
+            if time_match:
+                time_str = time_match.group(1).strip()
+            elif closing_time_iso:
                 try:
-                    naive_dt = datetime.strptime(closing_match.group(1).strip(), "%m/%d/%Y %I:%M %p")
-                    utc_dt = pytz.timezone('US/Central').localize(naive_dt).astimezone(pytz.UTC)
-                    closing_time_iso = utc_dt.isoformat()
+                    now = datetime.now(pytz.UTC)
+                    closing_dt = datetime.fromisoformat(closing_time_iso)
+                    diff = closing_dt - now
+                    if diff.total_seconds() > 0:
+                        days = diff.days
+                        hours, remainder = divmod(diff.seconds, 3600)
+                        minutes, _ = divmod(remainder, 60)
+                        time_str = f"{days}d {hours}h {minutes}m" if days > 0 else f"{hours}h {minutes}m"
+                    else:
+                        time_str = "Ended"
+                        status = "expired"
                 except: pass
 
-            time_str = "Syncing..."
-            parts = re.findall(r"(\d+)\s*([dhms])", inner_text)
-            if parts: time_str = "".join([f"{p[0]}{p[1]} " for p in parts]).strip()
+        return {
+            "item_name": item_name.strip(),
+            "current_bid": current_bid,
+            "total_bidders": total_bidders,
+            "time_remaining_str": time_str,
+            "closing_time": closing_time_iso,
+            "city": city,
+            "state": state,
+            "website_name": "GSA Auctions",
+            "status": "active"
+        }
 
-            logger.info(f"[GSA] V2.7 Result: {item_name[:25]}... | Bid: ${current_bid}")
-
-            return {
-                "item_name": item_name.strip(),
-                "current_bid": current_bid,
-                "total_bidders": 0, # Fallback
-                "time_remaining_str": time_str,
-                "closing_time": closing_time_iso,
-                "city": city,
-                "state": state,
-                "website_name": "GSA Auctions",
-                "status": "active"
-            }
-
-        except Exception as e:
-            logger.error(f"[GSA] V2.7 Error: {e}")
-            return None
-        finally:
-            await browser.close()
+    except Exception as e:
+        logger.error(f"[GSA] Scrape Failure: {e}")
+        return None
+    finally:
+        await context.close()

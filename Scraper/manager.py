@@ -1,6 +1,7 @@
 import asyncio
-from typing import Dict, List
+from typing import Dict, List, Optional
 import logging
+from playwright.async_api import async_playwright, Browser, Playwright
 from parsers.router import get_auction_data
 from db_client import get_supabase_client
 from constants import get_premium
@@ -13,16 +14,48 @@ class ScraperManager:
     """
     Manages a pool of active scraping tasks. 
     Handles task lifecycle: Start, Stop, Delete, and Clean Cleanup.
+    Uses a shared Playwright browser instance for efficiency.
     """
     def __init__(self):
         self.active_tasks: Dict[str, asyncio.Task] = {}  # auction_id -> asyncio.Task
+        self.browser: Optional[Browser] = None
+        self.playwright: Optional[Playwright] = None
+        self._lock = asyncio.Lock()
+
+    async def _ensure_browser(self):
+        async with self._lock:
+            if not self.browser:
+                logger.info("Initializing shared Playwright browser instance...")
+                self.playwright = await async_playwright().start()
+                self.browser = await self.playwright.chromium.launch(
+                    headless=True,
+                    args=["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage"]
+                )
 
     async def stop_all(self):
-        """Stops all active tasks gracefully."""
+        """Stops all active tasks gracefully and closes the browser."""
         ids = list(self.active_tasks.keys())
         for auction_id in ids:
             await self.stop_scraping_item(auction_id)
-        logger.info("All scraper tasks terminated.")
+        
+        async with self._lock:
+            try:
+                if self.browser:
+                    await self.browser.close()
+            except Exception as e:
+                logger.warning(f"Error closing browser: {e}")
+            finally:
+                self.browser = None
+                
+            try:
+                if self.playwright:
+                    await self.playwright.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping playwright: {e}")
+            finally:
+                self.playwright = None
+        
+        logger.info("All scraper tasks terminated and browser shutdown.")
 
     async def start_scraping_item(self, auction_id: str, url: str):
         """Starts a background scraping task for a specific item if not already running."""
@@ -50,7 +83,6 @@ class ScraperManager:
     async def delete_item(self, auction_id: str):
         """
         Stops the task and ensures no traces are left. 
-        In a real app, this would also trigger a database soft-delete/remove.
         """
         await self.stop_scraping_item(auction_id)
         logger.info(f"Item {auction_id} purged from memory.")
@@ -60,28 +92,36 @@ class ScraperManager:
         The actual loop that performs the scraping.
         """
         try:
+            await self._ensure_browser()
             supabase = get_supabase_client()
             while True:
                 try:
                     logger.info(f"--- [MONITORING CYCLE START] ---")
-                    logger.info(f"Target URL: {url}")
+                    logger.info(f"ID: {auction_id} | URL: {url}")
                     
-                    # 1. Perform the scrape
-                    logger.info(f"Step 1: Initalizing Playwright browser and navigating...")
-                    data = await get_auction_data(url)
+                    # 1. Perform the scrape using common browser
+                    data = await get_auction_data(url, browser=self.browser)
                     
                     if data:
                         logger.info(f"Step 2: Successfully extracted data from {data.get('website_name', 'Unknown')}")
-                        logger.info(f"       -> Item: {data.get('item_name')}")
+                        logger.info(f"       -> Item: {(data.get('item_name') or 'N/A')[:40]}...")
                         logger.info(f"       -> Bid: ${data.get('current_bid')}")
                         
                         # 2. Add Premium and timestamp
-                        data["premium_percentage"] = get_premium(url)
+                        # Priority: Scraped Premium > Constant Map
+                        # Treat 0 as "not found" if we have a constant available for the site
+                        scraped_premium = data.get("premium_percentage")
+                        if not scraped_premium:
+                            data["premium_percentage"] = get_premium(url)
+                            
                         data["last_scraped_at"] = "now()"
-                        data["status"] = "active"
+                        
+                        # Only set to active if it's not already flagged as expired by the scraper
+                        if data.get("status") != "expired":
+                            data["status"] = "active"
                         
                         # 3. Update Supabase
-                        logger.info(f"Step 3: Syncing results to Supabase Database...")
+                        logger.info(f"Step 3: Syncing results to Supabase...")
                         supabase.table("auctions").update(data).eq("id", auction_id).execute()
                         logger.info(f"✅ [SUCCESS] Auction synchronized.")
                     else:

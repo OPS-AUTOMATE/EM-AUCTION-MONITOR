@@ -2,4 +2,5 @@ playwright
 playwright-stealth
 supabase
 python-dotenv
-asyncio
+pytz
+httpx
