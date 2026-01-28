@@ -163,7 +163,7 @@ export default function Dashboard() {
         { 
           url: newUrl, 
           user_id: user.id,
-          status: 'pending'
+          status: 'active'
         }
       ])
 

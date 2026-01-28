@@ -26,7 +26,7 @@ async def _scrape_bma_with_context(url: str, context):
     page = await context.new_page()
     try:
         logger.info(f"Navigating to British Medical Auctions: {url}")
-        await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+        await page.goto(url, wait_until="domcontentloaded", timeout=15000)
         
         # Extract Item Name
         item_name = await page.locator(".lot-title, h1").first.inner_text()

@@ -44,10 +44,10 @@ async def _scrape_with_context(url: str, context):
     try:
         logger.info(f"[BidSpotter] Navigating to: {url}")
         # Use domcontentloaded instead of networkidle to avoid timeouts from background requests
-        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        await page.goto(url, wait_until="domcontentloaded", timeout=15000)
         
         # Wait for content to appear after initial load
-        await page.wait_for_selector('h1, #price, #timer', timeout=30000)
+        await page.wait_for_selector('h1, #price, #timer', timeout=15000)
         await asyncio.sleep(5) # Let dynamic prices/timers hydrate
 
         # --- 1. Extract Item Name ---

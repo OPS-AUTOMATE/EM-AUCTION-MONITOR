@@ -86,7 +86,7 @@ async def _scrape_generic_with_context(url: str, context):
     page = await context.new_page()
     try:
         # domcontentloaded is more resilient than networkidle
-        await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+        await page.goto(url, wait_until="domcontentloaded", timeout=15000)
         
         # Common patterns for Item Names
         item_name = "Unknown Item"

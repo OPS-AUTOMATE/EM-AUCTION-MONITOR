@@ -34,7 +34,7 @@ async def _scrape_with_context(url: str, context, is_shared: bool):
         
     try:
         logger.info(f"[GSA] Monitoring Start: {url}")
-        await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+        await page.goto(url, wait_until="domcontentloaded", timeout=15000)
         
         # Wait for content
         await page.wait_for_selector(".ppms-details-container", timeout=15000)

@@ -26,7 +26,7 @@ async def _scrape_centurion_with_context(url: str, context):
     page = await context.new_page()
     try:
         logger.info(f"Navigating to Centurion: {url}")
-        await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+        await page.goto(url, wait_until="domcontentloaded", timeout=15000)
         
         # Extract Item Name
         item_name = await page.locator("h1.lot-title, .lotname").first.inner_text()
