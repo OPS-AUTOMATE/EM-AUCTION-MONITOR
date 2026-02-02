@@ -1,29 +1,36 @@
 from playwright.async_api import async_playwright, Browser
 import logging
+from utils.bandwidth import apply_bandwidth_saver
 
 logger = logging.getLogger(__name__)
 
-async def scrape_bma(url: str, browser: Browser = None):
+async def scrape_bma(url: str, browser: Browser = None, context = None):
     """
     Scrapes British Medical Auctions (BMA).
+    Supports browser reuse and shared caching.
     """
+    if context:
+        # Use shared context (High Efficiency Caching)
+        return await _scrape_bma_with_context(url, context, is_shared=True)
+
     if browser:
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
-        return await _scrape_bma_with_context(url, context)
+        return await _scrape_bma_with_context(url, context, is_shared=False)
     
     async with async_playwright() as p:
         temp_browser = await p.chromium.launch(headless=True)
         context = await temp_browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
-        data = await _scrape_bma_with_context(url, context)
+        data = await _scrape_bma_with_context(url, context, is_shared=False)
         await temp_browser.close()
         return data
 
-async def _scrape_bma_with_context(url: str, context):
+async def _scrape_bma_with_context(url: str, context, is_shared=False):
     page = await context.new_page()
+    await apply_bandwidth_saver(page)
     try:
         logger.info(f"Navigating to British Medical Auctions: {url}")
         await page.goto(url, wait_until="domcontentloaded", timeout=15000)
@@ -57,4 +64,6 @@ async def _scrape_bma_with_context(url: str, context):
         logger.error(f"BMA scrape error: {e}")
         return None
     finally:
-        await context.close()
+        await page.close()
+        if not is_shared:
+            await context.close()

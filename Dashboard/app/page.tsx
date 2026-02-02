@@ -1,8 +1,9 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { createClient } from '@/utils/supabase-browser'
 import { useRouter } from 'next/navigation'
+import { getInitialPremium, getSiteKey } from '@/utils/constants'
 import { 
   Plus, 
   Search, 
@@ -19,7 +20,9 @@ import {
   ExternalLink,
   RefreshCw,
   TrendingUp,
-  Users
+  Users,
+  Volume2,
+  VolumeX
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 
@@ -40,6 +43,7 @@ interface Auction {
   serial_number?: string
   website_name?: string
   url: string
+  site_key?: string
   closing_time?: string
   status: 'active' | 'paused' | 'pending' | 'error' | 'expired'
 }
@@ -57,12 +61,16 @@ export default function Dashboard() {
   const [addingItem, setAddingItem] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [activeTab, setActiveTab] = useState<'all' | 'active' | 'ended'>('all')
+  const [activeSource, setActiveSource] = useState('All Auctions')
+  const [soundEnabled, setSoundEnabled] = useState(false)
+  const buzzedItems = useRef<Set<string>>(new Set())
+  const lastBuzzerTime = useRef<number>(0)
   const router = useRouter()
   const supabase = createClient()
 
   const fetchAuctions = useCallback(async (userId: string) => {
     const { data } = await supabase
-      .from('auctions')
+      .from('auction_items')
       .select('*')
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
@@ -70,24 +78,126 @@ export default function Dashboard() {
     if (data) setAuctions(data as Auction[])
   }, [supabase])
 
-  const handleRealtimeUpdate = useCallback((payload: RealtimeUpdatePayload) => {
+  const handleRealtimeUpdate = useCallback(async (payload: RealtimeUpdatePayload) => {
+    console.log('🔔 Realtime Event Received:', payload.eventType, payload)
     const { eventType, new: newRecord, old: oldRecord } = payload
+
     if (eventType === 'INSERT') {
       setAuctions(prev => [newRecord, ...prev])
     } else if (eventType === 'UPDATE') {
-      setAuctions(prev => prev.map(a => a.id === newRecord.id ? newRecord : a))
+      // SMART REFRESH: Fetch the full row from DB to ensure we have the latest price/premium
+      const { data, error } = await supabase
+        .from('auction_items')
+        .select('*')
+        .eq('id', newRecord.id)
+        .single()
+      
+      if (data && !error) {
+        console.log('🔄 Smart Refresh Successful:', data)
+        setAuctions(prev => prev.map(a => a.id === data.id ? data : a))
+      } else {
+        // Fallback to basic merge if fetch fails
+        setAuctions(prev => prev.map(a => a.id === newRecord.id ? { ...a, ...newRecord } : a))
+      }
     } else if (eventType === 'DELETE') {
-      setAuctions(prev => prev.filter(a => a.id === oldRecord.id))
+      setAuctions(prev => prev.filter(a => a.id !== oldRecord.id))
     }
-  }, [])
+  }, [supabase])
 
-  const [tick, setTick] = useState(0) // eslint-disable-line @typescript-eslint/no-unused-vars
+  const playBuzzer = useCallback(() => {
+    if (!soundEnabled) return
+    
+    // Cooldown check (Ref-based to avoid render loops)
+    const now = Date.now()
+    if (now - lastBuzzerTime.current < 10000) return 
+    lastBuzzerTime.current = now
+
+    const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+    if (!AudioContextClass) return
+
+    const audioCtx = new AudioContextClass()
+    
+    // Create a Layered Siren (Realistic Emergency Tone)
+    const playEmergencySiren = () => {
+      const duration = 2.5 
+      const startTime = audioCtx.currentTime
+
+      const createOsc = (type: OscillatorType, baseFreq: number, volume: number) => {
+        const osc = audioCtx.createOscillator()
+        const gain = audioCtx.createGain()
+        
+        osc.type = type
+        
+        // frequency sweep (low to high to low)
+        osc.frequency.setValueAtTime(baseFreq, startTime)
+        osc.frequency.exponentialRampToValueAtTime(baseFreq * 2.5, startTime + 0.6)
+        osc.frequency.exponentialRampToValueAtTime(baseFreq, startTime + 1.2)
+        osc.frequency.exponentialRampToValueAtTime(baseFreq * 2.5, startTime + 1.8)
+        osc.frequency.exponentialRampToValueAtTime(baseFreq, startTime + 2.4)
+        
+        gain.gain.setValueAtTime(0, startTime)
+        gain.gain.linearRampToValueAtTime(volume, startTime + 0.1)
+        gain.gain.linearRampToValueAtTime(volume, startTime + 2.2)
+        gain.gain.exponentialRampToValueAtTime(0.0001, startTime + 2.5)
+        
+        osc.connect(gain)
+        gain.connect(audioCtx.destination)
+        return osc
+      }
+
+      // Layer 1: The "Gritty" base (Square Wave)
+      const osc1 = createOsc('square', 140, 0.08)
+      // Layer 2: The "Sharp" alert (Sawtooth Wave)
+      const osc2 = createOsc('sawtooth', 280, 0.04)
+      
+      osc1.start(startTime)
+      osc2.start(startTime)
+      osc1.stop(startTime + duration)
+      osc2.stop(startTime + duration)
+    }
+
+    playEmergencySiren()
+  }, [soundEnabled])
+
+  const [tick, setTick] = useState(0)
 
   useEffect(() => {
     // Tick is used to trigger re-renders for the live countdown
     const timer = setInterval(() => setTick(prev => prev + 1), 1000)
     return () => clearInterval(timer)
   }, [])
+
+  // Monitor for critical items and buzz
+  useEffect(() => {
+    if (!soundEnabled) return
+
+    const now = new Date().getTime()
+    let hasNewCritical = false
+
+    auctions.forEach(auction => {
+      if (!auction.closing_time || auction.status === 'expired') return
+      
+      const end = new Date(auction.closing_time).getTime()
+      const diff = end - now
+      
+      // Critical = < 10 mins (600,000 ms)
+      if (diff > 0 && diff <= 600000) {
+        if (!buzzedItems.current.has(auction.id)) {
+          hasNewCritical = true
+          buzzedItems.current.add(auction.id)
+        }
+      } else if (diff > 600000 || diff <= 0) {
+        // Reset buzzer status if it leaves critical zone or ends
+        if (buzzedItems.current.has(auction.id)) {
+          buzzedItems.current.delete(auction.id)
+        }
+      }
+    })
+
+    if (hasNewCritical) {
+      playBuzzer()
+    }
+  }, [tick, auctions, soundEnabled, playBuzzer])
 
   const getRemainingTime = (closingTime: string | undefined, staticStr: string | undefined) => {
     if (!closingTime) return staticStr || 'Syncing...'
@@ -125,11 +235,12 @@ export default function Dashboard() {
     checkUser()
 
     const channel = supabase
-      .channel('dashboard-sync')
+      .channel('schema-db-changes')
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'auctions' },
+        { event: '*', schema: 'public', table: 'auction_items' },
         (payload) => {
+          console.log('🔄 Real-time Update Received:', payload);
           handleRealtimeUpdate(payload as unknown as RealtimeUpdatePayload)
         }
       )
@@ -158,12 +269,20 @@ export default function Dashboard() {
     setAddingItem(true)
 
     const { error } = await supabase
-      .from('auctions')
+      .from('auction_items')
       .insert([
         { 
           url: newUrl, 
           user_id: user.id,
-          status: 'active'
+          site_key: getSiteKey(newUrl),
+          status: 'active',
+          item_name: 'Syncing...',
+          website_name: 'Pending Sync',
+          current_bid: 0,
+          premium_percentage: getInitialPremium(newUrl),
+          total_bidders: 0,
+          closing_time: null, // Let the engine fetch the real time
+          time_remaining_str: 'Starting Sync...'
         }
       ])
 
@@ -183,7 +302,7 @@ export default function Dashboard() {
 
   const handleDelete = async (id: string) => {
     console.log('Attempting to delete item:', id);
-    const { error } = await supabase.from('auctions').delete().eq('id', id)
+    const { error } = await supabase.from('auction_items').delete().eq('id', id)
     if (error) console.error('Delete error:', error)
     else setAuctions(prev => prev.filter(a => a.id !== id))
   }
@@ -191,7 +310,7 @@ export default function Dashboard() {
   const toggleStatus = async (id: string, currentStatus: string) => {
     const newStatus = currentStatus === 'active' ? 'paused' : 'active'
     console.log(`Toggling status for ${id}: ${currentStatus} -> ${newStatus}`);
-    const { error } = await supabase.from('auctions').update({ status: newStatus }).eq('id', id)
+    const { error } = await supabase.from('auction_items').update({ status: newStatus }).eq('id', id)
     if (error) console.error('Toggle status error:', error)
     else setAuctions(prev => prev.map(a => a.id === id ? { ...a, status: newStatus as Auction['status'] } : a))
   }
@@ -204,13 +323,18 @@ export default function Dashboard() {
         (a.website_name?.toLowerCase().includes(searchQuery.toLowerCase()) ?? true) ||
         searchQuery === ''
 
-      // 2. Tab Filter
+      // 2. Source Filter
+      const matchesSource = 
+        activeSource === 'All Auctions' || 
+        a.website_name === activeSource
+
+      // 3. Status Tab Filter
       const matchesTab = 
         activeTab === 'all' || 
         (activeTab === 'active' && a.status === 'active') ||
         (activeTab === 'ended' && a.status === 'expired')
 
-      return matchesSearch && matchesTab
+      return matchesSearch && matchesSource && matchesTab
     })
     .sort((a, b) => {
       // Sort by closing_time (soonest first)
@@ -255,6 +379,13 @@ export default function Dashboard() {
                 <span className="role-label">Procurement Admin</span>
               </div>
             </div>
+            <button 
+              onClick={() => setSoundEnabled(!soundEnabled)} 
+              className={`icon-btn sound ${soundEnabled ? 'active' : ''}`}
+              title={soundEnabled ? "Mute Alert" : "Enable Sound Alert"}
+            >
+              {soundEnabled ? <Volume2 size={20} /> : <VolumeX size={20} />}
+            </button>
             <button onClick={handleLogout} className="icon-btn logout" title="Sign Out">
               <LogOut size={20} />
             </button>
@@ -272,23 +403,49 @@ export default function Dashboard() {
               <p>Tracking {auctions.length} medical equipment listings across 15+ websites.</p>
             </div>
             
-            <form onSubmit={handleAddItem} className="add-item-bar">
-              <div className="input-with-icon">
-                <Plus size={20} className="i-plus" />
-                <input 
-                  type="text" 
-                  placeholder="Paste a new GSA, GovPlanet, or BidSpotter URL..." 
-                  value={newUrl}
-                  onChange={(e) => setNewUrl(e.target.value)}
-                />
-              </div>
-              <button disabled={addingItem} className="submit-add">
-                {addingItem ? <RefreshCw className="animate-spin" size={18} /> : 'Track Link'}
+            <div className="auction-actions">
+              <form onSubmit={handleAddItem} className="add-item-bar">
+                <div className="input-with-icon">
+                  <Plus size={20} className="i-plus" />
+                  <input 
+                    type="text" 
+                    placeholder="Paste a new GSA, GovPlanet, or BidSpotter URL..." 
+                    value={newUrl}
+                    onChange={(e) => setNewUrl(e.target.value)}
+                  />
+                </div>
+                <button disabled={addingItem} className="submit-add">
+                  {addingItem ? <RefreshCw className="animate-spin" size={18} /> : 'Track Link'}
+                </button>
+              </form>
+              
+              <button 
+                onClick={() => {
+                  setSoundEnabled(true)
+                  playBuzzer()
+                }} 
+                className="pill ghost test-buzzer-btn"
+              >
+                <Volume2 size={14} />
+                Test Alarm Sound
               </button>
-            </form>
+            </div>
           </section>
 
-          {/* Quick Filters */}
+          {/* Mega Tabs - Sources */}
+          <div className="mega-tabs">
+            {['All Auctions', ...Array.from(new Set(auctions.filter(a => a.website_name).map(a => a.website_name!))).sort()].map(source => (
+              <button
+                key={source}
+                onClick={() => setActiveSource(source)}
+                className={`source-pill ${activeSource === source ? 'active' : ''}`}
+              >
+                {source}
+              </button>
+            ))}
+          </div>
+
+          {/* Quick Filters - Status */}
           <div className="filter-shelf">
             <div className="filter-group">
               <button 
@@ -327,18 +484,18 @@ export default function Dashboard() {
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.95 }}
                   transition={{ duration: 0.3 }}
-                  className={`glass-card auction-card ${auction.status}`}
+                  className={`glass-card auction-card ${auction.status} ${auction.status === 'expired' ? 'card-ended' : ''}`}
                 >
                   <div className="card-top">
                     <div className="status-indicator">
                       <div className={`dot ${auction.status}`}></div>
-                      <span>{auction.status}</span>
+                      <span>{auction.status === 'expired' ? 'ENDED' : auction.status.toUpperCase()}</span>
                     </div>
                     <div className="card-actions">
                       <button 
-                        onClick={() => toggleStatus(auction.id, auction.status)}
-                        className="action-btn" 
-                        title={auction.status === 'active' ? 'Pause' : 'Resume'}
+                        onClick={() => auction.status !== 'expired' && toggleStatus(auction.id, auction.status)}
+                        className={`action-btn ${auction.status === 'active' ? 'pause' : 'resume'}`} 
+                        title={auction.status === 'expired' ? 'Auction Ended' : (auction.status === 'active' ? 'Pause' : 'Resume')}
                         disabled={auction.status === 'expired'}
                       >
                         {auction.status === 'active' ? <Pause size={16} /> : <Play size={16} />}
@@ -370,16 +527,16 @@ export default function Dashboard() {
                   <div className="stats-row">
                     <div className="stat-box">
                       <div className="stat-label">
-                        <TrendingUp size={14} />
-                        BID + {auction.premium_percentage || 0}%
+                        CURRENT BID
                       </div>
                       <div className="stat-value small">
                         ${auction.current_bid?.toLocaleString() || '0.00'}
                       </div>
                     </div>
                     <div className="stat-box">
-                      <div className="stat-label">
-                        TOTAL PRICE
+                      <div className="stat-label highlight">
+                        <TrendingUp size={14} />
+                        TOTAL PRICE (+{auction.premium_percentage || 0}%)
                       </div>
                       <div className="stat-value highlight">
                         ${((auction.current_bid || 0) * (1 + (auction.premium_percentage || 0) / 100)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -783,6 +940,67 @@ export default function Dashboard() {
           font-weight: 600;
         }
         .ext { opacity: 0.5; }
+
+        .icon-btn.sound {
+          background: rgba(0,0,0,0.03);
+          border: 1.5px solid rgba(0,0,0,0.05);
+          color: var(--text-secondary);
+          margin-right: 12px;
+        }
+        .icon-btn.sound.active {
+          background: rgba(16, 185, 129, 0.1);
+          border-color: rgba(16, 185, 129, 0.2);
+          color: #10b981;
+        }
+        .icon-btn { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+        .icon-btn:hover { transform: scale(1.05); }
+
+        .test-buzzer-btn {
+          margin-top: 12px;
+          font-size: 12px;
+          opacity: 0.6;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .test-buzzer-btn:hover {
+          opacity: 1;
+        }
+
+        .mega-tabs {
+          display: flex;
+          gap: 12px;
+          margin-bottom: 24px;
+          overflow-x: auto;
+          padding-bottom: 8px;
+          scrollbar-width: none; /* Firefox */
+        }
+        .mega-tabs::-webkit-scrollbar { display: none; } /* Chrome/Safari */
+
+        .source-pill {
+          padding: 10px 20px;
+          border-radius: 14px;
+          background: white;
+          border: 1px solid var(--border-card);
+          color: var(--text-secondary);
+          font-weight: 700;
+          font-size: 14px;
+          white-space: nowrap;
+          cursor: pointer;
+          transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+          box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+        }
+        .source-pill:hover {
+          background: #fdfdfd;
+          transform: translateY(-1px);
+          border-color: rgba(0,0,0,0.1);
+        }
+        .source-pill.active {
+          background: var(--accent-blue);
+          color: white;
+          border-color: var(--accent-blue);
+          box-shadow: 0 10px 20px rgba(74, 122, 181, 0.25);
+        }
 
         @media (max-width: 1024px) {
           .nav-center { display: none; }

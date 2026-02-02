@@ -4,26 +4,31 @@ import logging
 import re
 from datetime import datetime
 import pytz
+from utils.bandwidth import apply_bandwidth_saver
 
 logger = logging.getLogger(__name__)
 
-async def scrape_gsa(url: str, browser: Browser = None):
+async def scrape_gsa(url: str, browser: Browser = None, context = None):
     """
     Precision GSA Scraper with Timezone Awareness.
-    Supports browser reuse for high-performance concurrent scraping.
+    Supports browser reuse and shared caching.
     """
+    if context:
+        # Use shared context (High Efficiency Caching)
+        return await _scrape_with_context(url, context, is_shared=True)
+    
     if browser:
+        # One-off context for this browser
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
             viewport={"width": 1920, "height": 1080}
         )
-        return await _scrape_with_context(url, context, is_shared=True)
+        return await _scrape_with_context(url, context, is_shared=False)
     
     async with async_playwright() as p:
         temp_browser = await p.chromium.launch(headless=True)
         context = await temp_browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-            viewport={"width": 1920, "height": 1080}
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
         )
         data = await _scrape_with_context(url, context, is_shared=False)
         await temp_browser.close()
@@ -31,7 +36,8 @@ async def scrape_gsa(url: str, browser: Browser = None):
 
 async def _scrape_with_context(url: str, context, is_shared: bool):
     page = await context.new_page()
-        
+    await apply_bandwidth_saver(page)
+    
     try:
         logger.info(f"[GSA] Monitoring Start: {url}")
         await page.goto(url, wait_until="domcontentloaded", timeout=15000)
@@ -160,6 +166,11 @@ async def _scrape_with_context(url: str, context, is_shared: bool):
                         status = "expired"
                 except: pass
 
+        # Get summary from bandwidth utility
+        from utils.bandwidth import get_bandwidth_summary
+        summary = get_bandwidth_summary(page)
+        logger.info(f"[GSA] {summary}")
+
         return {
             "item_name": item_name.strip(),
             "current_bid": current_bid,
@@ -169,11 +180,13 @@ async def _scrape_with_context(url: str, context, is_shared: bool):
             "city": city,
             "state": state,
             "website_name": "GSA Auctions",
-            "status": "active"
+            "status": status
         }
 
     except Exception as e:
         logger.error(f"[GSA] Scrape Failure: {e}")
         return None
     finally:
-        await context.close()
+        await page.close() 
+        if not is_shared:
+            await context.close()

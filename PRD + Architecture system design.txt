@@ -1,0 +1,320 @@
+# Intelligent Auction Monitoring System (IAMS)
+
+## 1. Product Requirements Document (PRD)
+
+### 1.1 Product Vision
+
+Build a reliable, low-noise, real-time auction monitoring platform that allows users to track auction items across multiple heterogeneous auction websites. The system must intelligently adapt its crawling strategy per item, minimize proxy usage, avoid bans, and deliver timely updates without data corruption or race conditions.
+
+This is not a bulk scraper. It is a **stateful monitoring engine**.
+
+---
+
+### 1.2 Target Users
+
+* Small teams tracking medical / industrial auction items
+* Power users monitoring time-sensitive auctions
+* Internal ops / research teams
+
+Initial scope: **~5 users**, expandable.
+
+---
+
+### 1.3 Core User Flows
+
+#### Authentication
+
+* Signup / Login via Supabase Auth
+* Session-based access (JWT handled by Supabase)
+
+#### Auction Tracking
+
+* User submits an auction item URL
+* System detects auction site
+* Item enters monitoring lifecycle
+* Data updates automatically based on time remaining
+
+#### Dashboard
+
+* List of tracked items
+* Current bid, bidders, premium, location
+* Time remaining (live countdown)
+* Status: Active / Paused / Error / Expired
+
+#### Notifications (Phase 2)
+
+* Optional realtime updates via Supabase Realtime
+* Optional email / webhook
+
+---
+
+### 1.4 Functional Requirements
+
+#### Auction Monitoring
+
+* Track per-item:
+
+  * Title
+  * Current bid
+  * Premium % (if available)
+  * City / State
+  * Number of bidders
+  * Auction start / end time
+  * Countdown timer
+
+#### Tiered Refresh Logic (Per Item)
+
+| Tier     | Condition | Refresh Interval |
+| -------- | --------- | ---------------- |
+| NORMAL   | > 8h      | 3h               |
+| CLOSING  | < 8h      | 1h               |
+| URGENT   | < 1h      | 2m               |
+| CRITICAL | < 10m     | 30s              |
+
+Each item recalculates its tier after every successful fetch.
+
+#### Smart Fetching
+
+* HTTP-first strategy
+* Escalation: HTTP → HTML parse → Headless browser
+* Persistent fetch method per item
+* Sticky proxy sessions per item
+
+#### Resource Blocking
+
+When browser is used:
+
+* Block images, fonts, video, maps, analytics
+* Allow only JS + XHR
+
+#### Failure Handling
+
+* Exponential backoff per item
+* Automatic retry with limits
+* Escalation on bot-detection
+* Item-level isolation (no cascade failures)
+
+---
+
+### 1.5 Non-Functional Requirements
+
+* High reliability under low traffic
+* No race conditions
+* Proxy budget awareness
+* Graceful degradation
+* Observability (logs + state introspection)
+
+---
+
+### 1.6 Out of Scope (v1)
+
+* CAPTCHA solving
+* Mobile app
+* Payment / billing
+* AI-based extraction
+
+---
+
+## 2. System Architecture Design
+
+### 2.1 High-Level Architecture
+
+```
+[Frontend (Web)]
+      |
+      | HTTPS
+      v
+[Backend API + Scheduler]
+      |
+      | SQL / Realtime
+      v
+[Supabase (Postgres + Auth)]
+      |
+      | Controlled outbound traffic
+      v
+[Proxy Network] → [Auction Websites]
+```
+
+---
+
+### 2.2 Frontend
+
+**Responsibilities**
+
+* Auth (via Supabase)
+* Auction CRUD
+* Real-time UI updates
+* Countdown timers
+
+**Tech (suggested)**
+
+* Next.js / React
+* Supabase client SDK
+
+Frontend is stateless.
+
+---
+
+### 2.3 Backend (Crawler Engine)
+
+**Responsibilities**
+
+* Scheduler loop
+* Worker pool
+* Site adapters
+* Proxy session management
+* Backoff & escalation
+
+**Key Characteristics**
+
+* No HTTP exposure except internal admin APIs
+* Runs continuously
+* CPU + memory bound
+
+---
+
+### 2.4 Database (Supabase Postgres)
+
+#### Current Table (auctions)
+
+Your existing table is a good *data snapshot*, but not sufficient for orchestration.
+
+It should be evolved into:
+
+* `auction_items` (state + scheduling)
+* Optional `auction_events` (history / audit)
+
+The current schema will be **expanded**, not discarded.
+
+Key missing concepts:
+
+* Scheduling (`next_fetch_at`)
+* Locking (`locked_until`)
+* Fetch strategy (`fetch_method`)
+* Backoff (`failure_count`, `backoff_until`)
+
+---
+
+### 2.5 Scheduler Design
+
+* Single scheduler loop
+* Queries due items based on `next_fetch_at`
+* Uses `FOR UPDATE SKIP LOCKED`
+* Hands items to workers
+
+No cron jobs. No per-site loops.
+
+---
+
+### 2.6 Worker Design
+
+Each worker:
+
+1. Locks item
+2. Fetches data (method already chosen)
+3. Parses + validates
+4. Updates item state
+5. Releases lock
+
+Workers are stateless; state lives in DB.
+
+---
+
+### 2.7 Proxy Strategy
+
+* Residential proxies
+* Sticky session per item
+* Proxy pool per site
+* Concurrency caps per site
+
+---
+
+### 2.8 Hosting Strategy (Important Decision)
+
+#### Option A: Single Instance (Recommended for v1)
+
+* One EC2 t3.micro OR DO droplet
+* Frontend + backend on same box
+* Reverse proxy (Nginx)
+
+**Pros**
+
+* Simpler ops
+* Lower cost
+* Easier debugging
+
+**Cons**
+
+* Limited scaling
+
+➡ Recommended until load exceeds ~1k concurrent items.
+
+---
+
+#### Option B: Split Frontend / Backend
+
+* Frontend: lightweight instance
+* Backend: dedicated worker instance
+
+**Pros**
+
+* Cleaner separation
+* Easier scaling later
+
+**Cons**
+
+* Higher cost
+* More DevOps overhead
+
+➡ Useful only after product validation.
+
+---
+
+### 2.9 AWS vs DigitalOcean
+
+* **DigitalOcean**: simpler, predictable pricing
+* **AWS t3.micro**: fine, but burst credits can throttle crawlers
+
+➡ For crawlers, **DO droplet is often more stable**.
+
+---
+
+## 3. Migration Strategy from Current Schema
+
+### Phase 1
+
+* Rename `auctions` → `auction_items`
+* Add scheduling + locking columns
+* Keep existing data fields
+
+### Phase 2
+
+* Introduce site adapters
+* Introduce scheduler + workers
+
+### Phase 3
+
+* Enable realtime UI updates
+
+---
+
+## 4. What You Do NOT Need Yet
+
+* Redis
+* Kafka / queues
+* Kubernetes
+* Microservices
+
+Premature complexity kills crawler systems.
+
+---
+
+## 5. Guiding Principle
+
+> Each auction item is a self-contained, state-driven process.
+
+If that remains true in your code, the system will scale calmly.
+
+---
+
+End of document.

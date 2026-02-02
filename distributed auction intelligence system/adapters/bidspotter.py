@@ -193,6 +193,11 @@ class BidspotterAdapter(BaseAuctionAdapter):
                 if "Auction Closed" in content or "Bidding has ended" in content:
                     status = "expired"
 
+                # VALIDATION: Critical fields
+                if not end_time_pkt:
+                    logger.warning(f"[Bidspotter] Failed to parse closing time for {url}. Skipping to avoid DB crash.")
+                    return None
+
                 return {
                     "item_name": item_name.strip()[:200],
                     "current_bid": current_bid,

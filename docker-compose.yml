@@ -1,12 +1,14 @@
 version: '3.8'
 
 services:
-  scraper:
+  items-monitor:
     build:
-      context: ./Scraper
+      context: "./distributed auction intelligence system"
     restart: always
     env_file:
-      - ./Scraper/.env
+      - "./distributed auction intelligence system/.env"
+    volumes:
+      - "./distributed auction intelligence system/proxies.txt:/app/proxies.txt"
     logging:
       driver: "json-file"
       options:

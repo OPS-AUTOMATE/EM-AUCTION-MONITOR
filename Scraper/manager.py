@@ -19,18 +19,39 @@ class ScraperManager:
     def __init__(self):
         self.active_tasks: Dict[str, asyncio.Task] = {}  # auction_id -> asyncio.Task
         self.browser: Optional[Browser] = None
+        self.context = None # Shared Context for Caching
         self.playwright: Optional[Playwright] = None
         self._lock = asyncio.Lock()
 
     async def _ensure_browser(self):
         async with self._lock:
-            if not self.browser:
+            # 1. Check if browser is healthy
+            is_healthy = self.browser and self.browser.is_connected()
+            
+            if not is_healthy:
+                if self.browser:
+                    logger.warning("Shared browser disconnected. Resetting...")
+                    self.browser = None
+                    self.context = None
+
                 logger.info("Initializing shared Playwright browser instance...")
-                self.playwright = await async_playwright().start()
-                self.browser = await self.playwright.chromium.launch(
-                    headless=True,
-                    args=["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage"]
-                )
+                try:
+                    self.playwright = await async_playwright().start()
+                    self.browser = await self.playwright.chromium.launch(
+                        headless=True,
+                        args=["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage"]
+                    )
+                    # Create a persistent-like context that caches data
+                    self.context = await self.browser.new_context(
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        viewport={"width": 1920, "height": 1080}
+                    )
+                    logger.info("Shared Context initialized (Caching Enabled).")
+                except Exception as e:
+                    logger.error(f"Failed to initialize browser: {e}")
+                    self.browser = None
+                    self.context = None
+                    raise
 
     async def stop_all(self):
         """Stops all active tasks gracefully and closes the browser."""
@@ -40,20 +61,31 @@ class ScraperManager:
         
         async with self._lock:
             try:
-                if self.browser:
-                    await self.browser.close()
-            except Exception as e:
-                logger.warning(f"Error closing browser: {e}")
-            finally:
-                self.browser = None
+                # 1. Close Context first
+                if self.context:
+                    try:
+                        await self.context.close()
+                    except: pass
                 
-            try:
+                # 2. Close Browser
+                if self.browser:
+                    try:
+                        await self.browser.close()
+                    except: pass
+                
+                # 3. CRITICAL: Stop the Playwright bridge itself
                 if self.playwright:
-                    await self.playwright.stop()
+                    try:
+                        await self.playwright.stop()
+                    except: pass
+
             except Exception as e:
-                logger.warning(f"Error stopping playwright: {e}")
+                logger.warning(f"Shutdown cleanup: {e}")
             finally:
+                self.context = None
+                self.browser = None
                 self.playwright = None
+                
         
         logger.info("All scraper tasks terminated and browser shutdown.")
 
@@ -89,51 +121,100 @@ class ScraperManager:
 
     async def _scraping_loop(self, auction_id: str, url: str):
         """
-        The actual loop that performs the scraping.
+        The actual loop that performs the scraping with Smart Refresh logic.
         """
+        last_closing_time = None
+        
         try:
             await self._ensure_browser()
             supabase = get_supabase_client()
+            
             while True:
                 try:
                     logger.info(f"--- [MONITORING CYCLE START] ---")
                     logger.info(f"ID: {auction_id} | URL: {url}")
                     
-                    # 1. Perform the scrape using common browser
-                    data = await get_auction_data(url, browser=self.browser)
+                    # 1. Perform the scrape using shared context for caching
+                    data = await get_auction_data(url, browser=self.browser, context=self.context)
                     
                     if data:
                         logger.info(f"Step 2: Successfully extracted data from {data.get('website_name', 'Unknown')}")
                         logger.info(f"       -> Item: {(data.get('item_name') or 'N/A')[:40]}...")
                         logger.info(f"       -> Bid: ${data.get('current_bid')}")
                         
+                        # Store closing time for interval calculation
+                        if data.get("closing_time"):
+                            last_closing_time = data.get("closing_time")
+
                         # 2. Add Premium and timestamp
-                        # Priority: Scraped Premium > Constant Map
-                        # Treat 0 as "not found" if we have a constant available for the site
                         scraped_premium = data.get("premium_percentage")
                         if not scraped_premium:
                             data["premium_percentage"] = get_premium(url)
                             
                         data["last_scraped_at"] = "now()"
                         
-                        # Only set to active if it's not already flagged as expired by the scraper
                         if data.get("status") != "expired":
                             data["status"] = "active"
                         
-                        # 3. Update Supabase
+                        # 3. Update Supabase (Filter out None values and handle closing_time persistence)
+                        update_payload = {k: v for k, v in data.items() if v is not None}
+                        
+                        # If a new closing_time wasn't found, keep using the last valid one we had
+                        if "closing_time" not in update_payload and last_closing_time:
+                            update_payload["closing_time"] = last_closing_time
+                        
                         logger.info(f"Step 3: Syncing results to Supabase...")
-                        supabase.table("auctions").update(data).eq("id", auction_id).execute()
-                        logger.info(f"✅ [SUCCESS] Auction synchronized.")
+                        supabase.table("auctions").update(update_payload).eq("id", auction_id).execute()
+                        logger.info(f"✅ [SUCCESS] Auction synchronized: {data.get('item_name', '')}")
                     else:
                         logger.error(f"❌ [FAILED] Parser returned No Data for {url}")
 
                 except Exception as inner_e:
                     logger.error(f"❌ [CRASH] Loop error for {auction_id}: {inner_e}")
-                    import traceback
-                    logger.error(traceback.format_exc())
+                    # Signal that the browser needs a restart on the next ensure_browser call
+                    if "closed" in str(inner_e).lower() or "disconnected" in str(inner_e).lower():
+                        logger.warning(f"Browser crash detected by {auction_id}. Scheduling re-init.")
+                        async with self._lock:
+                            self.browser = None
+                            self.context = None
 
-                # Sleep before next refresh
-                await asyncio.sleep(60) 
+                # --- SMART REFRESH LOGIC ---
+                # Default: 3 hours (10,800s)
+                interval = 10800 
+                
+                if last_closing_time:
+                    try:
+                        from datetime import datetime, timezone
+                        # Handle ISO format from parsers
+                        closing_dt = datetime.fromisoformat(last_closing_time.replace('Z', '+00:00'))
+                        now = datetime.now(timezone.utc)
+                        remaining = (closing_dt - now).total_seconds()
+
+                        if remaining <= 0:
+                            logger.info(f"🏁 Auction ended. Setting long sleep for {auction_id}.")
+                            interval = 86400 # Check once a day if it somehow stayed active
+                        elif remaining <= 600: # 10 minutes
+                            interval = 30
+                            logger.info(f"🔥 CRITICAL: < 10m left. Refreshing every 30s.")
+                        elif remaining <= 3600: # 1 hour
+                            interval = 120
+                            logger.info(f"⚡ URGENT: < 1h left. Refreshing every 2m.")
+                        elif remaining <= 28800: # 8 hours
+                            interval = 3600
+                            logger.info(f"⏳ CLOSING SOON: < 8h left. Refreshing every 1h.")
+                        else:
+                            interval = 10800
+                            logger.info(f"💤 NORMAL: > 8h left. Refreshing every 3h.")
+                    except Exception as e:
+                        logger.warning(f"Interval calculation error: {e}. Defaulting to 1h.")
+                        interval = 3600
+                else:
+                    # If we have no data yet (first scrape failed), retry sooner
+                    interval = 300 # 5 minutes
+                    logger.info(f"⚠️ No auction data yet. Retrying in 5m.")
+
+                logger.info(f"Next refresh in {interval} seconds...")
+                await asyncio.sleep(interval) 
         except asyncio.CancelledError:
             logger.info(f"Stopping monitor for {auction_id}...")
             raise
