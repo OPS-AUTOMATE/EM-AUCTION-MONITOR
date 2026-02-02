@@ -53,12 +53,13 @@ class GsaAdapter(BaseAuctionAdapter):
 
     async def _fetch_via_browser(self, url: str) -> Optional[Dict[str, Any]]:
         async with async_playwright() as p:
-            # Prepare Launch options (Proxy support)
+            # Prepare Launch options (NO PROXY for GSA as requested)
             launch_opts = {"headless": True}
-            proxy_conf = self.get_proxy_config()
-            if proxy_conf:
-                launch_opts["proxy"] = proxy_conf
-                logger.info(f"[GSA-Browser] Using Proxy: {proxy_conf['server']}")
+            
+            # proxy_conf = self.get_proxy_config()
+            # if proxy_conf:
+            #     launch_opts["proxy"] = proxy_conf
+            #     logger.info(f"[GSA-Browser] Using Proxy: {proxy_conf['server']}")
 
             browser = await p.chromium.launch(**launch_opts)
             context = await browser.new_context(
