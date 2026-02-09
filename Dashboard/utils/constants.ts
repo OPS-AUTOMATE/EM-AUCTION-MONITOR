@@ -27,13 +27,21 @@ export function getInitialPremium(url: string): number {
 }
 
 export function getSiteKey(url: string): string {
-  const lowercaseUrl = url.toLowerCase()
-  if (lowercaseUrl.includes("gsaauctions.gov")) return "gsa"
-  if (lowercaseUrl.includes("centurionservice.com")) return "centurion"
-  if (lowercaseUrl.includes("bidspotter.com")) return "bidspotter"
-  if (lowercaseUrl.includes("govplanet.com")) return "govplanet"
-  if (lowercaseUrl.includes("purplewave.com")) return "purplewave"
-  if (lowercaseUrl.includes("mazree.com")) return "mazree"
-  if (lowercaseUrl.includes("directbids.com")) return "directbids"
-  return "mock" // Default to mock for v2 testing
+  const lowercaseUrl = url.toLowerCase();
+  if (lowercaseUrl.includes("gsaauctions.gov")) return "gsa";
+  if (lowercaseUrl.includes("centurionservice.com")) return "centurion";
+  if (lowercaseUrl.includes("bidspotter.com")) return "bidspotter";
+  if (lowercaseUrl.includes("govplanet.com")) return "govplanet";
+  if (lowercaseUrl.includes("purplewave.com")) return "purplewave";
+  if (lowercaseUrl.includes("mazree.com")) return "mazree";
+  if (lowercaseUrl.includes("directbids.com")) return "directbids";
+  if (lowercaseUrl.includes("dotmed.com")) return "dotmed";
+  if (lowercaseUrl.includes("britishmedicalauctions.com")) return "bma";
+  if (lowercaseUrl.includes("surplusmarketplace.com")) return "surplusmarketplace";
+  if (lowercaseUrl.includes("globalmedauctions.com")) return "globalmed";
+  if (lowercaseUrl.includes("gcsurplus.ca")) return "gcsurplus";
+  if (lowercaseUrl.includes("publicsurplus.com")) return "publicsurplus";
+  if (lowercaseUrl.includes("troostwijkauctions.com")) return "troostwijk";
+  if (lowercaseUrl.includes("greenpulse.health")) return "greenpulse";
+  return "mock"; // Default fallback
 }
