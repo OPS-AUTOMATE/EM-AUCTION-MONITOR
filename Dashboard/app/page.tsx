@@ -63,6 +63,7 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<"all" | "active" | "ended">("all");
   const [activeSource, setActiveSource] = useState("All Auctions");
   const [soundEnabled, setSoundEnabled] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const buzzedItems = useRef<Set<string>>(new Set());
   const lastBuzzerTime = useRef<number>(0);
   const router = useRouter();
@@ -81,19 +82,34 @@ export default function Dashboard() {
     [supabase],
   );
 
+  const handleManualRefresh = useCallback(async () => {
+    if (!user) return;
+    setIsRefreshing(true);
+    await fetchAuctions(user.id);
+    // Brief delay for visual feedback
+    setTimeout(() => setIsRefreshing(false), 800);
+  }, [user, fetchAuctions]);
+
   const handleRealtimeUpdate = useCallback(
     async (payload: RealtimeUpdatePayload) => {
       console.log("🔔 Realtime Event Received:", payload.eventType, payload);
       const { eventType, new: newRecord, old: oldRecord } = payload;
 
       if (eventType === "INSERT") {
-        setAuctions((prev) => [newRecord, ...prev]);
+        setAuctions((prev) => {
+          // Prevent duplicates if item already exists
+          if (prev.some((a) => a.id === newRecord.id)) return prev;
+          return [newRecord, ...prev];
+        });
       } else if (eventType === "UPDATE") {
+        const targetId = newRecord.id || oldRecord.id;
+        if (!targetId) return;
+
         // SMART REFRESH: Fetch the full row from DB to ensure we have the latest price/premium
         const { data, error } = await supabase
           .from("auction_items")
           .select("*")
-          .eq("id", newRecord.id)
+          .eq("id", targetId)
           .single();
 
         if (data && !error) {
@@ -102,9 +118,7 @@ export default function Dashboard() {
         } else {
           // Fallback to basic merge if fetch fails
           setAuctions((prev) =>
-            prev.map((a) =>
-              a.id === newRecord.id ? { ...a, ...newRecord } : a,
-            ),
+            prev.map((a) => (a.id === targetId ? { ...a, ...newRecord } : a)),
           );
         }
       } else if (eventType === "DELETE") {
@@ -406,8 +420,9 @@ export default function Dashboard() {
     })
     .sort((a, b) => {
       // Sort by closing_time (soonest first)
-      if (!a.closing_time) return 1;
-      if (!b.closing_time) return -1;
+      if (!a.closing_time && !b.closing_time) return 0;
+      if (!a.closing_time) return -1; // Keep syncing items at top
+      if (!b.closing_time) return 1;
       return (
         new Date(a.closing_time).getTime() - new Date(b.closing_time).getTime()
       );
@@ -440,6 +455,14 @@ export default function Dashboard() {
           </div>
 
           <div className="nav-right">
+            <button
+              onClick={handleManualRefresh}
+              className={`icon-btn refresh ${isRefreshing ? "spinning" : ""}`}
+              title="Manual Sync"
+              disabled={isRefreshing}
+            >
+              <RefreshCw size={20} />
+            </button>
             <div className="user-info">
               <div className="avatar">{user?.email?.[0].toUpperCase()}</div>
               <div className="user-details">
@@ -1192,6 +1215,26 @@ export default function Dashboard() {
         }
         .icon-btn:hover {
           transform: scale(1.05);
+        }
+
+        .icon-btn.refresh {
+          background: rgba(0, 0, 0, 0.03);
+          border: 1.5px solid rgba(0, 0, 0, 0.05);
+          color: var(--accent-blue);
+          margin-right: 4px;
+        }
+
+        .spinning {
+          animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+          from {
+            transform: rotate(0deg);
+          }
+          to {
+            transform: rotate(360deg);
+          }
         }
 
         .test-buzzer-btn {
