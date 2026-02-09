@@ -14,7 +14,14 @@ class DirectBidsAdapter(BaseAuctionAdapter):
 
     async def fetch(self, url: str, preferred_method: int = 0) -> Optional[Dict[str, Any]]:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
+            # Proxy Rotation
+            launch_opts = {"headless": True}
+            proxy_conf = self.get_proxy_config()
+            if proxy_conf:
+                launch_opts["proxy"] = proxy_conf
+                logger.info(f"[DirectBids] Using Proxy: {proxy_conf['server']}")
+
+            browser = await p.chromium.launch(**launch_opts)
             context = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
             )
@@ -22,41 +29,67 @@ class DirectBidsAdapter(BaseAuctionAdapter):
             
             try:
                 logger.info(f"[DirectBids] Fetching: {url}")
-                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                await page.goto(url, wait_until="domcontentloaded", timeout=45000)
                 
-                # Wait for title to appear
-                await page.wait_for_selector('.auction-title, h1', timeout=15000)
-                await asyncio.sleep(3) # Stabilization
+                # Wait for main content to load
+                try:
+                    await page.wait_for_selector('h4, #item-main', timeout=15000)
+                except:
+                    logger.warning("[DirectBids] Timeout waiting for selectors.")
+
+                await asyncio.sleep(2) # Stabilization
+
+                # Helper to safely get text content
+                async def get_text_safe(selector: str, use_xpath: bool = False) -> str:
+                   try:
+                       loc = page.locator(f"xpath={selector}" if use_xpath else selector)
+                       if await loc.count() > 0:
+                           return await loc.first.inner_text()
+                   except: pass
+                   return ""
 
                 # 1. Item Name
-                item_name = "Unknown Item"
-                name_selectors = ['.auction-title', 'h1', '.title']
-                for sel in name_selectors:
-                    if await page.locator(sel).count() > 0:
-                        item_name = await page.locator(sel).first.inner_text()
-                        break
+                item_name = await get_text_safe("#item-main > div.row.gx-3.mb-3 > div > h4")
+                if not item_name:
+                    item_name = await get_text_safe("/html/body/div[2]/main/div[1]/div[2]/div/div[1]/div/h4", use_xpath=True)
                 
-                # 2. Bid Extraction
-                current_bid = 0.0
-                price_selectors = ['.current-price', '.bid-amount', '.price', '.amount']
-                for sel in price_selectors:
-                    if await page.locator(sel).count() > 0:
-                        bid_text = await page.locator(sel).first.inner_text()
-                        try:
-                            clean_bid = re.sub(r'[^\d.]', '', bid_text)
-                            if clean_bid:
-                                current_bid = float(clean_bid)
-                                break
-                        except: continue
+                # 2. Location
+                location = await get_text_safe("#item-main > div:nth-child(2) > div:nth-child(2) > div.col > div > div.col-auto > div:nth-child(1)")
+                if not location:
+                    location = await get_text_safe("/html/body/div[2]/main/div[1]/div[2]/div/div[2]/div[2]/div[1]/div/div[1]/div[1]", use_xpath=True)
 
-                # 3. Status Check
+                # 3. Time Left & Ends On
+                time_left = await get_text_safe("/html/body/div[2]/main/div[1]/div[2]/div/div[3]/div[1]", use_xpath=True)
+                ends_on = await get_text_safe("/html/body/div[2]/main/div[1]/div[2]/div/div[3]/div[2]/em", use_xpath=True)
+
+                # 4. Bid Extraction
+                current_bid_text = await get_text_safe("/html/body/div[2]/main/div[1]/div[2]/div/div[4]/div/span[1]/strong", use_xpath=True)
+                current_bid = 0.0
+                if current_bid_text:
+                    try:
+                        clean_bid = re.sub(r'[^\d.]', '', current_bid_text)
+                        if clean_bid:
+                            current_bid = float(clean_bid)
+                    except: pass
+
+                # 5. No. of Bids
+                bid_count_text = await get_text_safe("#current-bid > span.align-middle.ms-3 > span")
+                if not bid_count_text:
+                    bid_count_text = await get_text_safe("/html/body/div[2]/main/div[1]/div[2]/div/div[4]/div/span[2]/span", use_xpath=True)
+
+                # Status Check
                 status = "active"
-                if "closed" in await page.content().lower() or "sold" in await page.content().lower():
+                content_lower = (await page.content()).lower()
+                if "closed" in content_lower or "sold" in content_lower:
                     status = "expired"
 
                 return {
-                    "item_name": item_name.strip()[:200],
+                    "item_name": item_name.strip()[:200] if item_name else "Unknown Item",
                     "current_bid": current_bid,
+                    "city": location.strip() if location else "Unknown",
+                    "state": "",
+                    "total_bidders": int(re.sub(r'\D', '', bid_count_text)) if bid_count_text and re.sub(r'\D', '', bid_count_text) else 0,
+                    "time_remaining_str": time_left.strip() if time_left else "",
                     "website_name": "Direct Bids",
                     "status": status
                 }

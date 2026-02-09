@@ -14,7 +14,8 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Auction Bot | Real-Time Scraper",
-  description: "Premium dashboard for tracking medical equipment auctions in real-time.",
+  description:
+    "Premium dashboard for tracking medical equipment auctions in real-time.",
 };
 
 export default function RootLayout({
@@ -24,7 +25,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${geistSans.variable} ${geistMono.variable}`}>
+      <body
+        className={`${geistSans.variable} ${geistMono.variable}`}
+        suppressHydrationWarning
+      >
         {children}
       </body>
     </html>

@@ -1,125 +1,117 @@
 import asyncio
 import logging
-import json
 import re
 from typing import Optional, Dict, Any
-import httpx
+from playwright.async_api import async_playwright
 from .base_adapter import BaseAuctionAdapter
 
 logger = logging.getLogger(__name__)
 
 class MazreeAdapter(BaseAuctionAdapter):
     """
-    Hardened Mazree Adapter (Tier A - API/JSON).
-    Extracts data from the internal Angular state (ng-state) to avoid heavy browser scraping.
+    Hardened Mazree Adapter (Tier B - Playwright).
     """
 
     async def fetch(self, url: str, preferred_method: int = 0) -> Optional[Dict[str, Any]]:
-        # Mazree is reliable via HTTP because they embed the state in the HTML
-        try:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,xml;q=0.9,image/avif,webp,*/*;q=0.8"
-            }
+        async with async_playwright() as p:
+            # Proxy Rotation
+            launch_opts = {"headless": True}
+            proxy_conf = self.get_proxy_config()
+            if proxy_conf:
+                launch_opts["proxy"] = proxy_conf
+                logger.info(f"[Mazree] Using Proxy: {proxy_conf['server']}")
+
+            browser = await p.chromium.launch(**launch_opts)
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+            )
+            page = await context.new_page()
             
-            async with httpx.AsyncClient(headers=headers, timeout=15.0, follow_redirects=True) as client:
-                response = await client.get(url)
-                if response.status_code != 200:
-                    logger.warning(f"[Mazree] HTTP {response.status_code} for {url}")
-                    return None
+            try:
+                logger.info(f"[Mazree] Fetching: {url}")
+                await page.goto(url, wait_until="networkidle", timeout=60000)
                 
-                html = response.text
-                
-                # --- 1. Extract JSON State ---
-                # Mazree (Angular) stores the lot details in a script tag with id="ng-state"
-                state_match = re.search(r'<script id="ng-state" type="application/json">(.*?)</script>', html, re.DOTALL)
-                if not state_match:
-                    logger.warning(f"[Mazree] Could not find ng-state for {url}")
-                    # Fallback to Regex if JSON state is missing
-                    return self._regex_fallback(html)
-
+                # Wait for main content or title
                 try:
-                    state_data = json.loads(state_match.group(1))
-                    # Note: Angular state structure can be deep. We crawl it for keywords.
-                    return self._parse_mazree_state(state_data, html)
-                except Exception as e:
-                    logger.error(f"[Mazree] State parse error: {e}")
-                    return self._regex_fallback(html)
+                    await page.wait_for_selector('h3, app-buyer-listing-detail, app-guest-listing-detail', timeout=30000)
+                except:
+                    logger.warning("[Mazree] Timeout waiting for content.")
 
-        except Exception as e:
-            logger.error(f"[Mazree] Fetch Failure: {e}")
-            return None
+                await asyncio.sleep(5) # Stabilization
 
-    def _parse_mazree_state(self, state: Dict, html: str) -> Optional[Dict[str, Any]]:
-        """
-        Heuristic parsing of the Mazree Angular state.
-        Searching for lot details, prices, and locations.
-        """
-        # Mazree state is often a list of objects under __nghData__ or similar
-        # We also use raw regex on the whole HTML as a robust fallback for the name
-        item_name = "Unknown Mazree Item"
-        name_match = re.search(r'<title>(.*?)</title>', html, re.I)
-        if name_match: item_name = name_match.group(1).replace("| Mazree", "").strip()
+                # Helper to safely get text content
+                async def get_text_safe(selector: str, use_xpath: bool = False) -> str:
+                   try:
+                       loc = page.locator(f"xpath={selector}" if use_xpath else selector)
+                       if await loc.count() > 0:
+                           return await loc.first.inner_text()
+                   except: pass
+                   return ""
 
-        # Prices and Bidders are often in the state
-        current_bid = 0.0
-        total_bidders = 0
-        city, state_code = "Unknown", "Unknown"
-        closing_time = None
+                # 1. Item Name
+                item_name = await get_text_safe("#child-of-buyer-center-section > div.flex.flex-col.align-items-center\\.\\.text-surface-800.dark\\:text-surface-50.gap-3.ng-tns-c700949049-12 > h3")
+                if not item_name:
+                    item_name = await get_text_safe("/html/body/app-root/div/div/app-user-layout/div/div/div/div/div[2]/div/app-buyer-listing-detail/div/main/section[2]/div/div[1]/h3", use_xpath=True)
+                if not item_name:
+                    item_name = await get_text_safe("#child-of-buyer-center-section h3")
 
-        # Deep search in state (Mazree specific paths)
-        flat_state = str(state)
-        
-        # Current Bid
-        price_match = re.search(r"'currentBid':\s*([\d.]+)", flat_state)
-        if not price_match: price_match = re.search(r"\"currentBid\":\s*([\d.]+)", flat_state)
-        if price_match: current_bid = float(price_match.group(1))
-        
-        # Bidder Count
-        bidder_match = re.search(r"'bidderCount':\s*(\d+)", flat_state)
-        if not bidder_match: bidder_match = re.search(r"\"bidderCount\":\s*(\d+)", flat_state)
-        if bidder_match: total_bidders = int(bidder_match.group(1))
+                # 2. Price
+                price_text = await get_text_safe("#child-of-buyer-center-section > div.flex.flex-wrap.sm\\:items-center.justify-between.gap-4.sm\\:gap-0.pb-6.border-b.border-surface-200.dark\\:border-surface-600.font-poppins-regular.leading-none.ng-tns-c700949049-12 > div:nth-child(1) > div.flex.flex-col.gap-1.ml-5\\..ng-tns-c700949049-12.ng-star-inserted > h3")
+                if not price_text:
+                    price_text = await get_text_safe("/html/body/app-root/div/div/app-user-layout/div/div/div/div/div[2]/div/app-buyer-listing-detail/div/main/section[2]/div/div[3]/div[1]/div[2]/h3", use_xpath=True)
+                
+                if not price_text or "$" not in price_text:
+                    h3s = await page.locator("h3").all()
+                    for h3 in h3s:
+                        text = await h3.inner_text()
+                        if "$" in text:
+                            price_text = text
+                            break
+                
+                current_bid = 0.0
+                if price_text:
+                    try:
+                        clean_bid = re.sub(r'[^\d.]', '', price_text)
+                        if clean_bid:
+                            current_bid = float(clean_bid)
+                    except: pass
 
-        # Location
-        loc_match = re.search(r"'city':\s*'([^']+)',\s*'state':\s*'([^']+)'", flat_state)
-        if loc_match:
-            city, state_code = loc_match.group(1), loc_match.group(2)
+                # 3. Location
+                location = await get_text_safe("#description-parent-div > div > div > div > div:nth-child(1) > span:nth-child(2)")
+                if not location:
+                    location = await get_text_safe("/html/body/app-root/div/div/app-user-layout/div/div/div/div/div[2]/div/app-buyer-listing-detail/div/main/section[2]/div/app-common-cards-detail-page/section/div/p-card[1]/div/div[2]/div[1]/div/span[2]", use_xpath=True)
+                
+                if not location or location == "Unknown":
+                    page_text = (await page.content())
+                    loc_match = re.search(r"([A-Z][a-z]+,\s*[A-Z]{2})", page_text)
+                    if loc_match:
+                        location = loc_match.group(1).strip()
 
-        # Closing Time (Milliseconds usually)
-        time_match = re.search(r"'endTime':\s*(\d{10,13})", flat_state)
-        if time_match:
-            ts = int(time_match.group(1))
-            if ts > 10**11: ts /= 1000 # Convert ms to s
-            closing_time = datetime.fromtimestamp(ts, tz=pytz.UTC).isoformat()
+                # 4. Time Remaining
+                time_remaining = await get_text_safe("#child-of-buyer-center-section > div.flex.flex-wrap.items-center.justify-between.gap-2.md\\:gap-0.pb-6.border-b.border-surface-200.dark\\:border-surface-600.font-poppins-regular.ng-tns-c700949049-12.ng-star-inserted > span.font-poppins-regular.ng-tns-c700949049-12")
+                if not time_remaining:
+                    time_remaining = await get_text_safe("/html/body/app-root/div/div/app-guest-layout/div/div/main/app-guest-listing-detail/div/main/section[2]/div/div[2]/span[2]", use_xpath=True)
+                if not time_remaining:
+                    time_remaining = await get_text_safe("/html/body/app-root/div/div/app-user-layout/div/div/div/div/div[2]/div/app-buyer-listing-detail/div/main/section[2]/div/div[2]/span[2]", use_xpath=True)
 
-        return {
-            "item_name": item_name,
-            "current_bid": current_bid,
-            "total_bidders": total_bidders,
-            "closing_time": closing_time,
-            "city": city,
-            "state": state_code,
-            "website_name": "Mazree",
-            "status": "active"
-        }
+                # Status Check
+                status = "active"
+                content_lower = (await page.content()).lower()
+                if "closed" in content_lower or "sold" in content_lower or "ended" in content_lower:
+                    status = "expired"
 
-    def _regex_fallback(self, html: str) -> Optional[Dict[str, Any]]:
-        """
-        Standard Regex patterns if JSON parsing fails.
-        """
-        item_name = "N/A"
-        name_match = re.search(r"\"lotName\":\"([^\"]+)\"", html)
-        if name_match: item_name = name_match.group(1)
-        
-        bid = 0.0
-        bid_match = re.search(r"\"currentBid\":\s*([\d.]+)", html)
-        if bid_match: bid = float(bid_match.group(1))
+                return {
+                    "item_name": item_name.strip()[:200] if item_name else "Unknown Item",
+                    "current_bid": current_bid,
+                    "city": location.strip() if location else "Unknown",
+                    "state": "",
+                    "time_remaining_str": time_remaining.strip() if time_remaining else "",
+                    "website_name": "Mazree",
+                    "status": status
+                }
 
-        return {
-            "item_name": item_name,
-            "current_bid": bid,
-            "website_name": "Mazree",
-            "status": "active"
-        }
-import pytz
-from datetime import datetime
+            except Exception as e:
+                logger.error(f"[Mazree] Error: {e}")
+                return None
+            finally:
+                await browser.close()

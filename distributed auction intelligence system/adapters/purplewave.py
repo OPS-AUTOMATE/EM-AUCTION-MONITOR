@@ -22,7 +22,17 @@ class PurpleWaveAdapter(BaseAuctionAdapter):
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
             }
             
-            async with httpx.AsyncClient(headers=headers, timeout=15.0, follow_redirects=True) as client:
+            # Proxy Rotation
+            proxy_conf = self.get_proxy_config()
+            proxies = None
+            if proxy_conf:
+                proxies = proxy_conf['server']
+                if 'username' in proxy_conf:
+                    auth_prefix = f"{proxy_conf['username']}:{proxy_conf['password']}@"
+                    proxies = proxies.replace("://", f"://{auth_prefix}")
+                logger.info(f"[PurpleWave] Using Proxy: {proxy_conf['server']}")
+
+            async with httpx.AsyncClient(headers=headers, timeout=15.0, follow_redirects=True, proxy=proxies) as client:
                 response = await client.get(url)
                 if response.status_code != 200:
                     return None

@@ -15,7 +15,14 @@ class PublicSurplusAdapter(BaseAuctionAdapter):
 
     async def fetch(self, url: str, preferred_method: int = 0) -> Optional[Dict[str, Any]]:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
+            # Proxy Rotation
+            launch_opts = {"headless": True}
+            proxy_conf = self.get_proxy_config()
+            if proxy_conf:
+                launch_opts["proxy"] = proxy_conf
+                logger.info(f"[PublicSurplus] Using Proxy: {proxy_conf['server']}")
+
+            browser = await p.chromium.launch(**launch_opts)
             context = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
             )

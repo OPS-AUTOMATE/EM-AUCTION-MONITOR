@@ -100,15 +100,14 @@ async def run_monitoring_engine(poll_interval: int = 5):
             due_items = await db.fetch_due_items(limit=10)
 
             if not due_items:
-                # Log heartbeat summary every 10 minutes to verify background health
-                if now_ts - last_heartbeat > 600:
-                    logger.info("System Heartbeat: Engine Healthy. (Completed 10 background sweeps, 0 items due).")
+                # Log heartbeat summary every 1 minute for snappier feedback
+                if now_ts - last_heartbeat > 60:
+                    logger.debug("System Heartbeat: Engine Healthy.")
                     last_heartbeat = now_ts
                 
-                # SLEEP SHORT: To react "instantly" to frontend changes (e.g. paused -> active),
-                # we sleep for a short duration (5s) instead of 60s. 
-                # This is a safe, simple alternative to heavy Realtime websockets.
-                await asyncio.sleep(5) 
+                # SLEEP VERY SHORT: To react "instantly" to frontend changes (e.g. paused -> active),
+                # we sleep for only 1 second instead of 5.
+                await asyncio.sleep(1) 
                 continue
 
             # Reset heartbeat timer when activity starts

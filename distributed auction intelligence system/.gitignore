@@ -1,0 +1,15 @@
+# Environment variables
+.env
+
+# Session data (Sensitive)
+.sessions/
+*_session.json
+storage_state.json
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Debug logs
+debug_*.html
+*.log
