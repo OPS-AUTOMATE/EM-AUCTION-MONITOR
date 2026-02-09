@@ -109,11 +109,18 @@ class GlobalMedAdapter(BaseAuctionAdapter):
                 except Exception as e:
                     logger.warning(f"[GlobalMed] Bidders extraction failed: {e}")
 
-                # 7. Status Check
+                # 7. Status Check: Hardened
                 status = "active"
-                content_lower = await page.content()
-                if "closed" in content_lower.lower() or "ended" in content_lower.lower():
+                content_lower = (await page.content()).lower()
+                
+                # Check for explicit "Ended" or "Closed" signs
+                if "closed" in content_lower or "lot ended" in content_lower or "bidding closed" in content_lower:
                     status = "expired"
+                
+                # If we have any time string with digits, it's ACTIVE
+                if time_remaining_str and any(char.isdigit() for char in time_remaining_str):
+                    if "ended" not in time_remaining_str.lower():
+                        status = "active"
 
                 return {
                     "item_name": item_name.strip()[:200],

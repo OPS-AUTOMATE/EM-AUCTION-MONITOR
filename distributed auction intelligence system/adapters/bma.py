@@ -90,11 +90,17 @@ class BmaAdapter(BaseAuctionAdapter):
                 state = "UK"       # Default for British auctions
                 premium_percentage = 15  # Standard BMA premium
 
-                # 5. Status Check
+                # 5. Status Check: Hardened
                 status = "active"
-                content_lower = await page.content()
-                if "closed" in content_lower.lower() or "ended" in content_lower.lower():
+                content_lower = (await page.content()).lower()
+                
+                if "closed" in content_lower or "lot ended" in content_lower:
                     status = "expired"
+
+                # If time remaining is present and has numbers, it's active
+                if time_remaining_str and any(char.isdigit() for char in time_remaining_str):
+                    if "ended" not in time_remaining_str.lower():
+                        status = "active"
 
                 return {
                     "item_name": item_name.strip()[:200],

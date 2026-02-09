@@ -316,6 +316,9 @@ export default function Dashboard() {
 
     if (!error) {
       setNewUrl("");
+      // Switch to All Auctions view so the user can see the "Syncing..." card immediately
+      setActiveSource("All Auctions");
+      setActiveTab("all");
     } else {
       console.error("Add item error:", error);
       alert("Failed to add URL. Please try again.");

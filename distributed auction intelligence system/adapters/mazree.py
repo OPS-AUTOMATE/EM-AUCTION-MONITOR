@@ -87,24 +87,52 @@ class MazreeAdapter(BaseAuctionAdapter):
                     if loc_match:
                         location = loc_match.group(1).strip()
 
-                # 4. Time Remaining
+                # 4. Time Remaining (Smart Parse)
                 time_remaining = await get_text_safe("#child-of-buyer-center-section > div.flex.flex-wrap.items-center.justify-between.gap-2.md\\:gap-0.pb-6.border-b.border-surface-200.dark\\:border-surface-600.font-poppins-regular.ng-tns-c700949049-12.ng-star-inserted > span.font-poppins-regular.ng-tns-c700949049-12")
                 if not time_remaining:
                     time_remaining = await get_text_safe("/html/body/app-root/div/div/app-guest-layout/div/div/main/app-guest-listing-detail/div/main/section[2]/div/div[2]/span[2]", use_xpath=True)
                 if not time_remaining:
                     time_remaining = await get_text_safe("/html/body/app-root/div/div/app-user-layout/div/div/div/div/div[2]/div/app-buyer-listing-detail/div/main/section[2]/div/div[2]/span[2]", use_xpath=True)
 
-                # Status Check
+                # Status Check: Hardened
                 status = "active"
                 content_lower = (await page.content()).lower()
-                if "closed" in content_lower or "sold" in content_lower or "ended" in content_lower:
+                
+                # Try to find specific "In Progress" or "Ended" badges
+                if "in progress" in content_lower:
+                    status = "active"
+                elif "closed" in content_lower or "sold" in content_lower:
+                    # Only mark as ended if we don't see "In Progress"
                     status = "expired"
+
+                # If we have any parsed time, it MUST be active
+                if time_remaining and any(char.isdigit() for char in time_remaining):
+                    # Check if it actually says "Ended" in the time string itself
+                    if "ended" not in time_remaining.lower():
+                        status = "active"
+
+                # 5. Handle "Ends In" format for closing_time calculation
+                closing_time_iso = None
+                if time_remaining:
+                    try:
+                        # Format: "3 Days : 17 Hours : 51 Minutes : 55 Seconds"
+                        days, hours, minutes, seconds = 0, 0, 0, 0
+                        if m := re.search(r'(\d+)\s*Days?', time_remaining, re.I): days = int(m.group(1))
+                        if m := re.search(r'(\d+)\s*Hours?', time_remaining, re.I): hours = int(m.group(1))
+                        if m := re.search(r'(\d+)\s*Minutes?', time_remaining, re.I): minutes = int(m.group(1))
+                        if m := re.search(r'(\d+)\s*Seconds?', time_remaining, re.I): seconds = int(m.group(1))
+                        
+                        total_s = (days * 86400) + (hours * 3600) + (minutes * 60) + seconds
+                        if total_s > 0:
+                            closing_time_iso = (datetime.now(timezone.utc) + timedelta(seconds=total_s)).isoformat()
+                    except: pass
 
                 return {
                     "item_name": item_name.strip()[:200] if item_name else "Unknown Item",
                     "current_bid": current_bid,
                     "city": location.strip() if location else "Unknown",
                     "state": "",
+                    "closing_time": closing_time_iso,
                     "time_remaining_str": time_remaining.strip() if time_remaining else "",
                     "website_name": "Mazree",
                     "status": status
