@@ -51,44 +51,40 @@ async def run_monitoring_engine(poll_interval: int = 5):
         try:
             now_ts = datetime.now().timestamp()
             
-            # --- STATUS CHANGE MONITOR ---
-            # Explicitly check for Paused/Resumed items to log specific messages
-            # and to FORCE fetch resumed items immediately.
+            # --- STATUS CHANGE MONITOR & AUTO-EXPIRATION ---
             try:
-                current_states = await db.get_all_item_statuses()
-                for item_id, current_status in current_states.items():
+                now_utc = datetime.now(timezone.utc)
+                all_items = await db.fetch_all_items_minimal()
+                for item in all_items:
+                    item_id, current_status = item['id'], item['status']
+                    closing_time_str = item.get('closing_time')
                     prev_status = previous_states.get(item_id)
                     
-                    # 1. NEW ITEM DETECTED -> Force Fetch
-                    if prev_status is None:
-                        if current_status == 'active':
-                            logger.info(f"New Active Item {item_id[:8]} detected. Forcing immediate fetch.")
-                            try:
-                                supabase.table("auction_items").update({
-                                    "next_fetch_at": datetime.now(timezone.utc).isoformat(),
-                                    "locked_until": None
-                                }).eq("id", item_id).execute()
-                            except Exception as db_err:
-                                logger.error(f"Failed to force-fetch new item {item_id}: {db_err}")
+                    # 1. AUTO-EXPIRATION CHECK (Works even if Paused)
+                    if current_status != 'expired' and closing_time_str:
+                        try:
+                            ct = datetime.fromisoformat(closing_time_str.replace("Z", "+00:00"))
+                            if ct < now_utc:
+                                logger.info(f"Item {item_id[:8]} has EXPIRED based on clock. Updating status.")
+                                supabase.table("auction_items").update({"status": "expired"}).eq("id", item_id).execute()
+                                current_status = 'expired'
+                        except: pass
 
                     # 2. STATUS CHANGED
-                    elif prev_status != current_status:
-                        if current_status == 'paused':
-                            logger.info(f"Item {item_id[:8]} PAUSED by user.")
-                        elif current_status == 'active' and prev_status == 'paused':
-                            logger.info(f"Item {item_id[:8]} RESUMED by user. Forcing immediate fetch.")
-                            # Force update next_fetch_at to NOW so it gets picked up immediately
-                            try:
-                                supabase.table("auction_items").update({
-                                    "next_fetch_at": datetime.now(timezone.utc).isoformat(),
-                                    "locked_until": None
-                                }).eq("id", item_id).execute()
-                            except Exception as db_err:
-                                logger.error(f"Failed to force-fetch item {item_id}: {db_err}")
-                            
-                previous_states = current_states
+                    if prev_status != current_status:
+                        if prev_status is not None:
+                            logger.info(f"Item {item_id[:8]} state: {prev_status} -> {current_status}")
+                        
+                        # If user toggled to active OR it's a new active item, force fetch
+                        if current_status == 'active':
+                            supabase.table("auction_items").update({
+                                "next_fetch_at": now_utc.isoformat(),
+                                "locked_until": None
+                            }).eq("id", item_id).execute()
+                    
+                    previous_states[item_id] = current_status
             except Exception as e:
-                logger.error(f"State Tracker Loop Error: {e}")
+                logger.error(f"State Tracker Error: {e}")
             # -----------------------------
 
             # 1. Periodic Cleanup (Every 1 hour)
@@ -105,8 +101,6 @@ async def run_monitoring_engine(poll_interval: int = 5):
                     logger.debug("System Heartbeat: Engine Healthy.")
                     last_heartbeat = now_ts
                 
-                # SLEEP VERY SHORT: To react "instantly" to frontend changes (e.g. paused -> active),
-                # we sleep for only 1 second instead of 5.
                 await asyncio.sleep(1) 
                 continue
 
@@ -118,8 +112,6 @@ async def run_monitoring_engine(poll_interval: int = 5):
             tasks = [worker.process_item(item, f"worker-{i}") for i, item in enumerate(due_items)]
             await asyncio.gather(*tasks)
 
-            # If we just processed items, check immediately for the next batch
-            # otherwise, wait a tiny bit to avoid hammering
             await asyncio.sleep(2)
 
         except Exception as e:

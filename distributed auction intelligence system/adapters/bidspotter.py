@@ -187,11 +187,15 @@ class BidspotterAdapter(BaseAuctionAdapter):
                     logger.warning(f"[Bidspotter] End time extract failed: {e}")
 
                 # 5. Status check
-                # Simple check for "Auction Closed" text anywhere or sold state
                 status = "active"
-                content = await page.content()
-                if "Auction Closed" in content or "Bidding has ended" in content:
-                    status = "expired"
+                if not item_name or item_name == "Unknown Item":
+                    content = await page.content()
+                    if "Auction Closed" in content or "Bidding has ended" in content:
+                        status = "expired"
+                
+                # Double-check: if we have a valid time, it's definitely ACTIVE
+                if end_time_pkt:
+                    status = "active"
 
                 # VALIDATION: Critical fields
                 if not end_time_pkt:

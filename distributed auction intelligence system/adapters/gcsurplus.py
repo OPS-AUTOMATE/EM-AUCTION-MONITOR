@@ -84,12 +84,15 @@ class GCSurplusAdapter(BaseAuctionAdapter):
                 if not closing_date:
                     closing_date = await get_text_safe("/html/body/div[3]/div/main/div[2]/form/div/div/div[6]/div[2]/section/div/div[1]/section/div/dl/dd[8]/span", use_xpath=True)
 
-                # Status Check
+                # Status Check: Hardened
                 status = "active"
-                content_lower = await page.content()
-                content_lower = content_lower.lower()
-                if "closed" in content_lower or "fermé" in content_lower:
-                    status = "expired"
+                if not item_name or item_name == "Unknown Item":
+                     content_lower = (await page.content()).lower()
+                     if "closed" in content_lower or "fermé" in content_lower:
+                         status = "expired"
+                
+                if time_remaining and any(char.isdigit() for char in time_remaining):
+                    status = "active"
 
                 return {
                     "item_name": item_name.strip()[:200] if item_name else "Unknown Item",

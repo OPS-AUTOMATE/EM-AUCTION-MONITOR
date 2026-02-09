@@ -187,13 +187,13 @@ class CenturionAdapter(BaseAuctionAdapter):
                         # Use inner_text to strip HTML tags for cleaner regex matching
                         plain_text = await page.inner_text("body")
                         
-                        # 1. Visual Time Scrape (e.g. "Time left: 21h 5m 21s")
+                        # 1. Visual Time Scrape
                         if not closing_time_iso or status == "expired":
-                            # Use a more flexible regex on clean text
+                            # Pattern A: Relative Countdown (e.g. "Time left: 21h 5m 21s")
                             time_match = re.search(r'Time\s*left:\s*([\d\s\w]+)', plain_text, re.IGNORECASE)
                             if time_match:
                                 time_str = time_match.group(1).strip()
-                                logger.info(f"[Centurion DEBUG] Found visual time string: '{time_str}'")
+                                logger.info(f"[Centurion DEBUG] Found visual countdown: '{time_str}'")
                                 
                                 days, hours, minutes, seconds = 0, 0, 0, 0
                                 if m := re.search(r'(\d+)\s*d', time_str): days = int(m.group(1))
@@ -205,7 +205,28 @@ class CenturionAdapter(BaseAuctionAdapter):
                                 if total_s > 0:
                                     closing_time_iso = (datetime.now(timezone.utc) + timedelta(seconds=total_s)).isoformat()
                                     status = "active"
-                                    logger.info(f"[Centurion] Visual Time Scrape Success: {time_str} -> {total_s}s")
+                                    logger.info(f"[Centurion] Visual Countdown Success: {total_s}s")
+                            
+                            # Pattern B: Absolute Date (e.g. "Ends: Feb 10, 2026, 8:02 PM" or "Ends Feb 10 2026")
+                            if not closing_time_iso:
+                                date_match = re.search(r'Ends:?\s*([A-Z][a-z]{2}\s+\d{1,2},?\s+\d{4}(?:,?\s+\d{1,2}:\d{2}\s*[APM]+)?)', plain_text, re.IGNORECASE)
+                                if date_match:
+                                    date_str = date_match.group(1).strip().replace(",", "")
+                                    logger.info(f"[Centurion DEBUG] Found visual date string: '{date_str}'")
+                                    try:
+                                        # Try common formats
+                                        for fmt in ("%b %d %Y %I:%M %p", "%b %d %Y"):
+                                            try:
+                                                dt = datetime.strptime(date_str, fmt)
+                                                # Assume current year if missing, or use parsed year. Centurion usually provides year.
+                                                # If no timezone, assume Eastern (Centurion default) or UTC.
+                                                # For now, let's treat it as local-ish or UTC.
+                                                closing_time_iso = dt.replace(tzinfo=timezone.utc).isoformat()
+                                                logger.info(f"[Centurion] Visual Date Parse Success: {closing_time_iso}")
+                                                break
+                                            except: continue
+                                    except Exception as e:
+                                        logger.warning(f"[Centurion] Date parse error: {e}")
                         
                         # 2. Visual Price Detection (e.g. "Enter $5 or more")
                         if current_bid == 0.0:

@@ -82,11 +82,17 @@ class TroostwijkAdapter(BaseAuctionAdapter):
                 # 5. No. of Bids
                 bid_count_text = await get_text_safe("/html/body/div[1]/div/main/div[2]/div/div[3]/div[1]/div[5]/div[1]/div[1]", use_xpath=True)
 
-                # Status Check
+                # Status Check: Hardened
                 status = "active"
-                content_lower = (await page.content()).lower()
-                if "closed" in content_lower or "sold" in content_lower:
-                    status = "expired"
+                # Only mark as expired if explicitly closed or if no time remaining and no title
+                if not item_name or item_name == "Unknown Item":
+                     content_lower = (await page.content()).lower()
+                     if "closed" in content_lower or "sold" in content_lower:
+                         status = "expired"
+                
+                # If we have time remaining, it's definitely NOT expired
+                if time_remaining and any(char.isdigit() for char in time_remaining):
+                    status = "active"
 
                 return {
                     "item_name": item_name.strip()[:200] if item_name else "Unknown Item",

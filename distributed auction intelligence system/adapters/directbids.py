@@ -77,11 +77,16 @@ class DirectBidsAdapter(BaseAuctionAdapter):
                 if not bid_count_text:
                     bid_count_text = await get_text_safe("/html/body/div[2]/main/div[1]/div[2]/div/div[4]/div/span[2]/span", use_xpath=True)
 
-                # Status Check
+                # Status Check: Hardened
                 status = "active"
-                content_lower = (await page.content()).lower()
-                if "closed" in content_lower or "sold" in content_lower:
-                    status = "expired"
+                if not item_name or item_name == "Unknown Item":
+                     content_lower = (await page.content()).lower()
+                     if "closed" in content_lower or "sold" in content_lower:
+                         status = "expired"
+                
+                # If we have time left or an end date, it's active
+                if (time_left and any(char.isdigit() for char in time_left)) or (ends_on and len(ends_on) > 5):
+                    status = "active"
 
                 return {
                     "item_name": item_name.strip()[:200] if item_name else "Unknown Item",

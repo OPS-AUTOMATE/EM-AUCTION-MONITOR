@@ -576,12 +576,27 @@ export default function Dashboard() {
                 >
                   <div className="card-top">
                     <div className="status-indicator">
-                      <div className={`dot ${auction.status}`}></div>
-                      <span>
-                        {auction.status === "expired"
-                          ? "ENDED"
-                          : auction.status.toUpperCase()}
-                      </span>
+                      {(() => {
+                        const isTimeUp =
+                          auction.closing_time &&
+                          new Date(auction.closing_time).getTime() <
+                            new Date().getTime();
+                        const displayStatus =
+                          auction.status === "expired" || isTimeUp
+                            ? "expired"
+                            : auction.status;
+                        const label =
+                          displayStatus === "expired"
+                            ? "ENDED"
+                            : displayStatus.toUpperCase();
+
+                        return (
+                          <>
+                            <div className={`dot ${displayStatus}`}></div>
+                            <span>{label}</span>
+                          </>
+                        );
+                      })()}
                     </div>
                     <div className="card-actions">
                       <button
