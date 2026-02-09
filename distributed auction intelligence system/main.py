@@ -55,12 +55,20 @@ async def run_monitoring_engine(poll_interval: int = 5):
             try:
                 now_utc = datetime.now(timezone.utc)
                 all_items = await db.fetch_all_items_minimal()
+                current_ids = {item['id'] for item in all_items}
+                
+                # 1. Detect and log DELETIONS
+                deleted_ids = set(previous_states.keys()) - current_ids
+                for d_id in deleted_ids:
+                    logger.info(f"Item {d_id[:8]} DELETED from system. Stopping monitor.")
+                    del previous_states[d_id]
+
                 for item in all_items:
                     item_id, current_status = item['id'], item['status']
                     closing_time_str = item.get('closing_time')
                     prev_status = previous_states.get(item_id)
                     
-                    # 1. AUTO-EXPIRATION CHECK (Works even if Paused)
+                    # 2. AUTO-EXPIRATION CHECK (Works even if Paused)
                     if current_status != 'expired' and closing_time_str:
                         try:
                             ct = datetime.fromisoformat(closing_time_str.replace("Z", "+00:00"))
@@ -70,10 +78,12 @@ async def run_monitoring_engine(poll_interval: int = 5):
                                 current_status = 'expired'
                         except: pass
 
-                    # 2. STATUS CHANGED
+                    # 3. STATUS CHANGED (or NEW ITEM)
                     if prev_status != current_status:
                         if prev_status is not None:
                             logger.info(f"Item {item_id[:8]} state: {prev_status} -> {current_status}")
+                        else:
+                            logger.info(f"Item {item_id[:8]} ADDED to monitor.")
                         
                         # If user toggled to active OR it's a new active item, force fetch
                         if current_status == 'active':
