@@ -1,12 +1,12 @@
 # Deployment Guide: Auction Bot
 
-This guide explains how to deploy the Scraper and Dashboard on a VPS (e.g., DigitalOcean, AWS, Linode).
+This guide explains how to deploy the Bot and Dashboard on a VPS (e.g., DigitalOcean, AWS, Linode).
 
 ## 1. Prerequisites
 
 - A Linux VPS with **Docker** and **Docker Compose** installed.
 - A **Supabase** project (URL and API Keys).
-- A domain or subdomain (e.g., `auction.yourdomain.com`).
+- A domain or subdomain (e.g., `auctions.example.com`).
 
 ## 2. Server Setup
 
@@ -14,21 +14,21 @@ This guide explains how to deploy the Scraper and Dashboard on a VPS (e.g., Digi
 
 ```bash
 git clone https://github.com/OPS-AUTOMATE/EM-AUCTION-MONITOR.git
-cd auction-bot
+cd EM-AUCTION-MONITOR
 ```
 
 ### Configure Environment Variables
 
-1. **Scraper**:
-   Create `Scraper/.env`:
+1. **Bot**:
+   Create `bot/.env`:
 
    ```env
    SUPABASE_URL=https://your-project.supabase.co
-   SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+   SUPABASE_KEY=your-service-role-key
    ```
 
 2. **Dashboard**:
-   Create `Dashboard/.env.local`:
+   Create `dashboard/.env.local`:
 
    ```env
    NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
@@ -46,7 +46,7 @@ docker-compose up -d --build
 This will:
 
 - Build the Next.js Dashboard.
-- Build the Python Scraper.
+- Build the Python Bot.
 - Launch Chromium inside the container.
 - Start monitoring the database.
 
@@ -67,14 +67,14 @@ Use Certbot to get a free SSL certificate:
 
 ```bash
 sudo apt-get install certbot python3-certbot-nginx
-sudo certbot --nginx -d auction.yourdomain.com
+sudo certbot --nginx -d auctions.example.com
 ```
 
 ## 6. Verification
 
-- Visit `auction.yourdomain.com` and log in.
-- Add a GSA link.
-- Check the Scraper logs: `docker-compose logs -f scraper`.
+- Visit your domain and log in.
+- Add an auction link.
+- Check the Bot logs: `docker-compose logs -f items-monitor`.
 
 ---
 
