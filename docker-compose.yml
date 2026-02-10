@@ -3,12 +3,12 @@ version: '3.8'
 services:
   items-monitor:
     build:
-      context: "./distributed auction intelligence system"
+      context: "./bot"
     restart: always
     env_file:
-      - "./distributed auction intelligence system/.env"
+      - "./bot/.env"
     volumes:
-      - "./distributed auction intelligence system/proxies.txt:/app/proxies.txt"
+      - "./bot/proxies.txt:/app/proxies.txt"
     logging:
       driver: "json-file"
       options:
@@ -17,12 +17,12 @@ services:
 
   dashboard:
     build:
-      context: ./Dashboard
+      context: "./dashboard"
     ports:
       - "3000:3000"
     restart: always
     env_file:
-      - ./Dashboard/.env.local
+      - "./dashboard/.env.local"
     depends_on:
       - items-monitor
     logging:
@@ -30,3 +30,4 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+

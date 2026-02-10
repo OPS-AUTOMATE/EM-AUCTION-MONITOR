@@ -1,6 +1,0 @@
-playwright
-playwright-stealth
-supabase
-python-dotenv
-pytz
-httpx

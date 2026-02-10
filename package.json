@@ -1,0 +1,14 @@
+{
+  "name": "auction-bot-workspace",
+  "version": "1.0.0",
+  "description": "Integrated Auction Monitoring System",
+  "scripts": {
+    "dev:dashboard": "cd dashboard && npm run dev",
+    "dev:bot": "cd bot && python main.py",
+    "docker:up": "docker-compose up --build",
+    "docker:down": "docker-compose down"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
