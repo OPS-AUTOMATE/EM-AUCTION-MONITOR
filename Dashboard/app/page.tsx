@@ -61,7 +61,9 @@ export default function Dashboard() {
   const [newUrl, setNewUrl] = useState("");
   const [addingItem, setAddingItem] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [activeTab, setActiveTab] = useState<"all" | "active" | "ended">("all");
+  const [activeTab, setActiveTab] = useState<
+    "all" | "active" | "ended" | "paused"
+  >("all");
   const [activeSource, setActiveSource] = useState("All Auctions");
   const [soundEnabled, setSoundEnabled] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -474,6 +476,59 @@ export default function Dashboard() {
     }
   };
 
+  const handlePauseAll = async () => {
+    if (!user) return;
+    if (!confirm("Are you sure you want to PAUSE all active items?")) return;
+
+    // Filter local active items first
+    const activeItems = auctions.filter((a) => a.status === "active");
+    if (activeItems.length === 0) return;
+
+    // Update in Supabase
+    const { error } = await supabase
+      .from("auction_items")
+      .update({ status: "paused", locked_until: null })
+      .eq("user_id", user.id)
+      .eq("status", "active");
+
+    if (error) {
+      console.error("Pause All Error:", error);
+      alert("Failed to pause items.");
+    } else {
+      // Optimistic Update
+      setAuctions((prev) =>
+        prev.map((a) =>
+          a.status === "active"
+            ? { ...a, status: "paused", locked_until: null }
+            : a,
+        ),
+      );
+    }
+  };
+
+  const handleDeleteAll = async () => {
+    if (!user) return;
+    if (
+      !confirm(
+        "Are you sure you want to DELETE ALL items? This action cannot be undone.",
+      )
+    )
+      return;
+
+    const { error } = await supabase
+      .from("auction_items")
+      .delete()
+      .eq("user_id", user.id);
+
+    if (error) {
+      console.error("Delete All Error:", error);
+      alert("Failed to delete items.");
+    } else {
+      setAuctions([]);
+      buzzedItems.current.clear();
+    }
+  };
+
   const filteredAuctions = auctions
     .filter((a) => {
       // 1. Search Filter (Safe for undefined names)
@@ -492,12 +547,24 @@ export default function Dashboard() {
       const matchesTab =
         activeTab === "all" ||
         (activeTab === "active" && a.status === "active") ||
+        (activeTab === "paused" && a.status === "paused") ||
         (activeTab === "ended" && a.status === "expired");
 
       return matchesSearch && matchesSource && matchesTab;
     })
     .sort((a, b) => {
-      // Sort by closing_time (soonest first)
+      // Priority: Active/Paused FIRST, Expired LAST
+      if (a.status !== "expired" && b.status === "expired") return -1;
+      if (a.status === "expired" && b.status !== "expired") return 1;
+
+      // If both are expired, sort by closing time (newest ended first)
+      if (a.status === "expired" && b.status === "expired") {
+        const tA = a.closing_time ? new Date(a.closing_time).getTime() : 0;
+        const tB = b.closing_time ? new Date(b.closing_time).getTime() : 0;
+        return tB - tA;
+      }
+
+      // If both are active/paused, sort by closing_time (soonest closing first)
       if (!a.closing_time && !b.closing_time) return 0;
       if (!a.closing_time) return -1; // Keep syncing items at top
       if (!b.closing_time) return 1;
@@ -608,6 +675,25 @@ export default function Dashboard() {
                 <Volume2 size={14} />
                 Test Alarm Sound
               </button>
+
+              <button
+                onClick={handlePauseAll}
+                className="pill ghost"
+                title="Pause All Active Auctions"
+              >
+                <Pause size={14} />
+                Pause All
+              </button>
+
+              <button
+                onClick={handleDeleteAll}
+                className="pill ghost"
+                style={{ color: "#ff4d4d", borderColor: "#ff4d4d20" }}
+                title="Delete ALL Auctions"
+              >
+                <Trash2 size={14} />
+                Delete All
+              </button>
             </div>
           </section>
 
@@ -640,13 +726,19 @@ export default function Dashboard() {
                 onClick={() => setActiveTab("all")}
                 className={`pill ${activeTab === "all" ? "active" : ""}`}
               >
-                All Items
+                All Items ({auctions.length})
               </button>
               <button
                 onClick={() => setActiveTab("active")}
                 className={`pill ${activeTab === "active" ? "active" : ""}`}
               >
                 Active
+              </button>
+              <button
+                onClick={() => setActiveTab("paused")}
+                className={`pill ${activeTab === "paused" ? "active" : ""}`}
+              >
+                Paused
               </button>
               <button
                 onClick={() => setActiveTab("ended")}
