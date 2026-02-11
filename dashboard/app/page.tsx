@@ -17,6 +17,8 @@ import {
   Pause,
   Filter,
   ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
   ExternalLink,
   RefreshCw,
   TrendingUp,
@@ -65,6 +67,7 @@ export default function Dashboard() {
     "all" | "active" | "ended" | "paused"
   >("all");
   const [activeSource, setActiveSource] = useState("All Auctions");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [soundEnabled, setSoundEnabled] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const buzzedItems = useRef<Set<string>>(new Set());
@@ -549,12 +552,10 @@ export default function Dashboard() {
         (activeTab === "active" && a.status === "active") ||
         (activeTab === "paused" && a.status === "paused") ||
         (activeTab === "ended" && a.status === "expired");
-
-      return matchesSearch && matchesSource && matchesTab;
     })
     .sort((a, b) => {
-      // Sort by Closing Time Descending (Future -> Past)
-      // Treats 'syncing' items as far future to keep them at top
+      // Sort by Closing Time: respect sortOrder (asc/desc)
+      // Treats 'syncing' items as far future (MAX_SAFE_INTEGER)
       const tA = a.closing_time
         ? new Date(a.closing_time).getTime()
         : Number.MAX_SAFE_INTEGER;
@@ -562,7 +563,7 @@ export default function Dashboard() {
         ? new Date(b.closing_time).getTime()
         : Number.MAX_SAFE_INTEGER;
 
-      return tB - tA;
+      return sortOrder === "asc" ? tA - tB : tB - tA;
     });
 
   return (
@@ -739,8 +740,26 @@ export default function Dashboard() {
               </button>
             </div>
             <div className="sort-group">
-              <button className="pill ghost">
-                <ArrowUpDown size={14} /> Time Remaining
+              <button
+                onClick={() =>
+                  setSortOrder((prev) => (prev === "asc" ? "desc" : "asc"))
+                }
+                className="pill ghost"
+                title={
+                  sortOrder === "asc"
+                    ? "Sort Descending (Furthest First)"
+                    : "Sort Ascending (Soonest First)"
+                }
+              >
+                {sortOrder === "asc" ? (
+                  <>
+                    <ArrowUp size={14} /> Closing Soon
+                  </>
+                ) : (
+                  <>
+                    <ArrowDown size={14} /> Closing Last
+                  </>
+                )}
               </button>
               <button className="pill ghost">
                 <Filter size={14} /> Filters
