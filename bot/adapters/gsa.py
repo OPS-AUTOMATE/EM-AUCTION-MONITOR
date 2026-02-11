@@ -38,26 +38,41 @@ class GsaAdapter(BaseAuctionAdapter):
     async def _fetch_via_api(self, suid: str, original_url: str) -> Optional[Dict[str, Any]]:
         import httpx
         api_url = f"https://gsaauctions.gov/gsaauctions/aucindx/?suid={suid}"
+        logger.info(f"[GSA-API] Fetching: {api_url}")
+        
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(api_url)
+            async with httpx.AsyncClient(timeout=15.0, verify=False) as client:
+                # Add headers to mimic a browser to avoid 403
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+                    "Accept": "application/json, text/plain, */*",
+                    "Referer": "https://gsaauctions.gov/"
+                }
+                response = await client.get(api_url, headers=headers)
+                logger.info(f"[GSA-API] Status: {response.status_code}")
+                
                 if response.status_code == 200:
-                    data = response.json()
-                    item_name = data.get("itemName") or data.get("lotName") or "GSA Item"
-                    current_bid = float(str(data.get("currentBid", 0)).replace(",", ""))
-                    total_bidders = int(data.get("bidderCount", 0))
-                    closing_time_iso = data.get("closingTime") or data.get("auctionEndTime")
-                    
-                    return {
-                        "item_name": item_name.strip()[:200],
-                        "current_bid": current_bid,
-                        "total_bidders": total_bidders,
-                        "closing_time": closing_time_iso,
-                        "city": data.get("city", "Unknown"),
-                        "state": data.get("state", "Unknown"),
-                        "website_name": "GSA Auctions",
-                        "status": "active"
-                    }
+                    try:
+                        data = response.json()
+                        logger.info(f"[GSA-API] Data Keys: {list(data.keys())}")
+                        item_name = data.get("itemName") or data.get("lotName") or "GSA Item"
+                        current_bid = float(str(data.get("currentBid", 0)).replace(",", ""))
+                        total_bidders = int(data.get("bidderCount", 0))
+                        closing_time_iso = data.get("closingTime") or data.get("auctionEndTime")
+                        
+                        return {
+                            "item_name": item_name.strip()[:200],
+                            "current_bid": current_bid,
+                            "total_bidders": total_bidders,
+                            "closing_time": closing_time_iso,
+                            "city": data.get("city", "Unknown"),
+                            "state": data.get("state", "Unknown"),
+                            "website_name": "GSA Auctions",
+                            "status": "active"
+                        }
+                    except Exception as e:
+                        logger.error(f"[GSA-API] JSON Parse Error: {e}")
+                        return None
         except: return None
         return None
 
