@@ -151,8 +151,12 @@ class DatabaseLayer:
             return FetchTier.NORMAL, now + timedelta(minutes=5)
             
         try:
-            # Parse ISO date
-            closing_time = datetime.fromisoformat(closing_time_iso.replace("Z", "+00:00"))
+            # Force timezone awareness to prevent naive/aware subtraction crashes
+            clean_iso = closing_time_iso.replace("Z", "+00:00")
+            if "+" not in clean_iso and "-" not in clean_iso[10:]:
+                clean_iso += "+00:00"
+                
+            closing_time = datetime.fromisoformat(clean_iso)
             remaining = (closing_time - now).total_seconds()
             
             if remaining <= 0:

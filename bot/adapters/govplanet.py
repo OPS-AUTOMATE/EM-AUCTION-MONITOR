@@ -164,12 +164,14 @@ class GovPlanetAdapter(BaseAuctionAdapter):
                             months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
                             month_idx = months.index(month_str.capitalize()) + 1
                             
+                            # Use aware datetime to prevent engine overlap errors
                             dt = datetime(now.year, month_idx, day_val, 0, 0, 0)
-                            # If the date is very far in the past (e.g. Dec and it's Jan), move to next year
+                            # If the date is very far in the past, move to next year
                             if dt < now - timedelta(days=30):
                                 dt = dt.replace(year=now.year + 1)
                             
-                            closing_time_iso = dt.isoformat()
+                            # Add UTC offset to string
+                            closing_time_iso = dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
                     except:
                         pass
 

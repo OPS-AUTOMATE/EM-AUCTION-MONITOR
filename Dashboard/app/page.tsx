@@ -430,13 +430,14 @@ export default function Dashboard() {
     // 1. Calculate a "now" timestamp in ISO format
     const now = new Date().toISOString();
 
-    // 2. Perform update: Status to 'active', next_fetch_at to now, clear locked_until
+    // 2. Perform update: Status to 'active', next_fetch_at to now, protect with lock
+    const lockTime = new Date(Date.now() + 60000).toISOString();
     const { error } = await supabase
       .from("auction_items")
       .update({
         status: "active",
         next_fetch_at: now,
-        locked_until: null,
+        locked_until: lockTime,
       })
       .eq("id", id);
 
