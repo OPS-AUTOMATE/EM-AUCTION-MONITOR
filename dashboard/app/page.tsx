@@ -552,6 +552,8 @@ export default function Dashboard() {
         (activeTab === "active" && a.status === "active") ||
         (activeTab === "paused" && a.status === "paused") ||
         (activeTab === "ended" && a.status === "expired");
+
+      return matchesSearch && matchesSource && matchesTab;
     })
     .sort((a, b) => {
       // Sort by Closing Time: respect sortOrder (asc/desc)
