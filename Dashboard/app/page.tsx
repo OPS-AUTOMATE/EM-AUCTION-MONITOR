@@ -107,9 +107,23 @@ export default function Dashboard() {
         const targetId = newRecord.id || oldRecord.id;
         if (!targetId) return;
 
-        console.log("🔄 Realtime Update applied:", newRecord);
+        // Realtime Update Handler
+        console.log("🔄 Update params:", newRecord);
         setAuctions((prev) =>
-          prev.map((a) => (a.id === targetId ? { ...a, ...newRecord } : a)),
+          prev.map((a) => {
+            if (a.id !== targetId) return a;
+
+            // Merge the new data
+            const updated = { ...a, ...newRecord };
+
+            // FIX: Ensure blinker stops if lock is released or status changes to expired
+            // If newRecord explicitly has locked_until as null, it will be in updated.
+            // But if status flips to 'expired' or 'active' due to finish, we want to be sure.
+            if (newRecord.status === "expired") {
+              updated.locked_until = null;
+            }
+            return updated;
+          }),
         );
       } else if (eventType === "DELETE") {
         setAuctions((prev) => prev.filter((a) => a.id !== oldRecord.id));
