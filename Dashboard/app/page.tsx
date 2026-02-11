@@ -710,7 +710,6 @@ export default function Dashboard() {
                         }
                         className="action-btn btn-refresh"
                         title="Instant Refresh"
-                        style={{ color: "#4a7ab5" }}
                       >
                         <RefreshCw size={16} />
                       </button>
@@ -1170,39 +1169,6 @@ export default function Dashboard() {
         .dot.fetching {
           background: #ef4444; /* Red dot */
           box-shadow: 0 0 10px #ef4444;
-          animation: pulse-red 1s infinite alternate;
-        }
-
-        @keyframes pulse-red {
-          from {
-            opacity: 1;
-            transform: scale(1);
-          }
-          to {
-            opacity: 0.4;
-            transform: scale(1.5);
-          }
-        }
-
-        :global(.glass-card.auction-card.is-fetching) {
-          border-color: #fbbf24 !important; /* Amber border */
-          animation: blink-bg 1.5s infinite ease-in-out !important;
-          box-shadow: 0 0 20px rgba(251, 191, 36, 0.2) !important;
-        }
-
-        :global(@keyframes blink-bg) {
-          0%,
-          100% {
-            background-color: rgba(255, 255, 255, 0.95);
-          }
-          50% {
-            background-color: rgba(
-              254,
-              243,
-              199,
-              0.85
-            ); /* Visible Amber Tint */
-          }
         }
 
         .card-actions {
@@ -1234,15 +1200,15 @@ export default function Dashboard() {
           color: #f43f5e;
           border-color: #f43f5e;
         }
+        .action-btn.btn-refresh {
+          color: #4a7ab5;
+          background: rgba(74, 122, 181, 0.05);
+          border-color: rgba(74, 122, 181, 0.1);
+        }
         .action-btn.btn-refresh:hover {
           background: rgba(74, 122, 181, 0.1);
           border-color: var(--accent-blue);
           color: var(--accent-blue);
-        }
-        :global(.auction-card.is-fetching .btn-refresh) {
-          animation: spin 1.5s linear infinite;
-          background: rgba(74, 122, 181, 0.15) !important;
-          border-color: var(--accent-blue) !important;
         }
 
         .item-title {
@@ -1457,6 +1423,56 @@ export default function Dashboard() {
           .nav-container {
             padding: 0 20px;
           }
+        }
+      `}</style>
+      <style jsx global>{`
+        @keyframes pulse-red {
+          from {
+            opacity: 1;
+            transform: scale(1);
+          }
+          to {
+            opacity: 0.4;
+            transform: scale(1.5);
+          }
+        }
+
+        @keyframes blink-bg {
+          0%,
+          100% {
+            background-color: rgba(255, 255, 255, 0.95);
+          }
+          50% {
+            background-color: rgba(254, 243, 199, 0.85);
+          }
+        }
+
+        @keyframes spin {
+          from {
+            transform: rotate(0deg);
+          }
+          to {
+            transform: rotate(360deg);
+          }
+        }
+
+        .auction-card.is-fetching {
+          border-color: #fbbf24 !important;
+          animation: blink-bg 1.5s infinite ease-in-out !important;
+          box-shadow: 0 0 20px rgba(251, 191, 36, 0.2) !important;
+        }
+
+        .auction-card.is-fetching .btn-refresh {
+          animation: spin 1.5s linear infinite !important;
+          background: rgba(74, 122, 181, 0.15) !important;
+          border-color: var(--accent-blue) !important;
+          color: var(--accent-blue) !important;
+        }
+
+        .dot.fetching {
+          background: #ef4444 !important;
+          box-shadow: 0 0 10px #ef4444 !important;
+          animation: pulse-red 1s infinite alternate !important;
         }
       `}</style>
     </div>
