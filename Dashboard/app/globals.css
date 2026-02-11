@@ -131,3 +131,13 @@ body::after {
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.2);
 }
+
+.pill.ghost.danger {
+  color: #ff4d4d;
+  border-color: rgba(255, 77, 77, 0.2) !important;
+}
+
+.pill.ghost.danger:hover {
+  background: rgba(255, 77, 77, 0.1);
+  border-color: #ff4d4d;
+}

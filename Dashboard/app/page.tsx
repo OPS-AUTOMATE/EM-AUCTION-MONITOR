@@ -679,8 +679,7 @@ export default function Dashboard() {
 
               <button
                 onClick={handleDeleteAll}
-                className="pill ghost"
-                style={{ color: "#ff4d4d", borderColor: "#ff4d4d20" }}
+                className="pill ghost danger"
                 title="Delete ALL Auctions"
               >
                 <Trash2 size={14} />
