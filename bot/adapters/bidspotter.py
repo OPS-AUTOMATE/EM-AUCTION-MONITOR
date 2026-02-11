@@ -127,6 +127,19 @@ class BidspotterAdapter(BaseAuctionAdapter):
                 else:
                     logger.warning("[Bidspotter] Bidders count not found.")
 
+                # 5. Buyer's Premium (New)
+                # Strategy A: User XPath
+                premium_xpath = "/html/body/div[1]/main/div/div[6]/div[1]/div/div[2]/div[2]/div[1]/form/div/div[4]/div[2]/div[2]/div"
+                premium_text = await get_text_safe(f"xpath={premium_xpath}")
+                premium_val = 0.0
+                
+                if premium_text:
+                    # Extract number from "18%" or "18 %"
+                    mt = re.search(r'(\d+(?:\.\d+)?)', premium_text)
+                    if mt:
+                        premium_val = float(mt.group(1))
+                        logger.info(f"[Bidspotter] Extracted Premium: {premium_val}%")
+
                 # 5. End Time
                 # Strategy: Locate the time element and extract raw string
                 time_xpath_1 = "/html/body/div[1]/main/div/div[6]/div[1]/div/div[2]/div[6]/div/div[1]/div[2]/div[2]/div/div/span"
@@ -251,6 +264,7 @@ class BidspotterAdapter(BaseAuctionAdapter):
                     "current_bid": current_bid,
                     "city": city,
                     "state": state,
+                    "premium_percentage": premium_val,
                     "total_bidders": total_bidders,
                     "closing_time": end_time_pkt,
                     "time_remaining_str": raw_time_str if raw_time_str else "Syncing...",
