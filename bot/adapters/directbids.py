@@ -30,7 +30,11 @@ class DirectBidsAdapter(BaseAuctionAdapter):
             
             try:
                 logger.info(f"[DirectBids] Fetching: {url}")
-                await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                await page.goto(url, wait_until="commit", timeout=60000)
+                try:
+                    await page.wait_for_load_state("domcontentloaded", timeout=20000)
+                except:
+                    logger.debug("[DirectBids] domcontentloaded timeout, continuing...")
                 
                 # Wait for main content to load
                 try:

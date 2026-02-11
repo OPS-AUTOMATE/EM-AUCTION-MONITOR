@@ -36,7 +36,7 @@ class BidspotterAdapter(BaseAuctionAdapter):
             
             try:
                 logger.info(f"[Bidspotter] Fetching: {url}")
-                await page.goto(url, wait_until="load", timeout=30000)
+                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
                 await asyncio.sleep(5) # Wait for JS to settle
 
                 # Helper to safely get text content

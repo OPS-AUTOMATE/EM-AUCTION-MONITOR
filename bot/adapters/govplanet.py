@@ -37,7 +37,10 @@ class GovPlanetAdapter(BaseAuctionAdapter):
 
                 logger.info(f"[GovPlanet] Fetching: {url}")
                 try:
-                    await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                    await page.goto(url, wait_until="commit", timeout=60000)
+                    try:
+                        await page.wait_for_load_state("domcontentloaded", timeout=20000)
+                    except: pass
                 except Exception as e:
                     logger.warning(f"[GovPlanet] Page load timeout/error: {e}")
                     # Might still be able to Scrape if content loaded partially
