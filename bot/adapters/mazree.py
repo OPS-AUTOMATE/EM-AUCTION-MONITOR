@@ -28,23 +28,28 @@ class MazreeAdapter(BaseAuctionAdapter):
             )
             page = await context.new_page()
 
-            # OPTIMIZATION: Block heavy/tracking resources to prevent timeouts
+            # OPTIMIZATION: Block heavy assets but allow stylesheets (safer for SPA)
             await page.route("**/*", lambda route: route.abort() 
-                if route.request.resource_type in ["image", "media", "font", "stylesheet"] 
+                if route.request.resource_type in ["image", "media", "font"] 
                 else route.continue_())
 
             try:
-                logger.info(f"[Mazree] Fetching: {url}")
-                # Use domcontentloaded for faster initial load, then wait for content
-                await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                logger.info(f"[Mazree] Fetching: {url} (Long Timeout)")
+                # 'commit' is safer for sites that might have heavy background tracking
+                await page.goto(url, wait_until="commit", timeout=90000)
                 
-                # Wait for main content or title
+                # Check for redirect to Login
+                current_url = page.url
+                if "/SignIn" in current_url or "login" in current_url.lower():
+                    logger.warning(f"[Mazree] Redirected to Login Page! Content might be restricted: {current_url}")
+                
+                # Manual wait for content to appear (Listing detail or at least the app container)
                 try:
-                    await page.wait_for_selector('h3, app-buyer-listing-detail, app-guest-listing-detail, .listing-detail', timeout=20000)
+                    await page.wait_for_selector('h3, .listing-detail, .app-container, body', timeout=60000)
                 except:
-                    logger.warning("[Mazree] Timeout waiting for content.")
+                    logger.warning("[Mazree] Content selector timeout.")
 
-                await asyncio.sleep(5) # Stabilization for SPA rendering
+                await asyncio.sleep(12) # Heavy SPA stabilization (Angular can be slow to render)
 
                 # Helper to safely get text content
                 async def get_text_safe(selector: str, use_xpath: bool = False) -> str:
