@@ -107,22 +107,10 @@ export default function Dashboard() {
         const targetId = newRecord.id || oldRecord.id;
         if (!targetId) return;
 
-        // SMART REFRESH: Fetch the full row from DB to ensure we have the latest price/premium
-        const { data, error } = await supabase
-          .from("auction_items")
-          .select("*")
-          .eq("id", targetId)
-          .single();
-
-        if (data && !error) {
-          console.log("🔄 Smart Refresh Successful:", data);
-          setAuctions((prev) => prev.map((a) => (a.id === data.id ? data : a)));
-        } else {
-          // Fallback to basic merge if fetch fails
-          setAuctions((prev) =>
-            prev.map((a) => (a.id === targetId ? { ...a, ...newRecord } : a)),
-          );
-        }
+        console.log("🔄 Realtime Update applied:", newRecord);
+        setAuctions((prev) =>
+          prev.map((a) => (a.id === targetId ? { ...a, ...newRecord } : a)),
+        );
       } else if (eventType === "DELETE") {
         setAuctions((prev) => prev.filter((a) => a.id !== oldRecord.id));
       }
@@ -406,7 +394,17 @@ export default function Dashboard() {
     const previousAuctions = [...auctions];
     setAuctions((prev) =>
       prev.map((a) =>
-        a.id === id ? { ...a, status: newStatus as Auction["status"] } : a,
+        a.id === id
+          ? {
+              ...a,
+              status: newStatus as Auction["status"],
+              // If resuming, show fetching state optimistically
+              locked_until:
+                newStatus === "active"
+                  ? new Date(Date.now() + 60000).toISOString()
+                  : a.locked_until,
+            }
+          : a,
       ),
     );
 
@@ -667,7 +665,7 @@ export default function Dashboard() {
                     auction.status === "expired" ? "card-ended" : ""
                   } ${
                     auction.locked_until &&
-                    new Date(auction.locked_until).getTime() > Date.now() - 5000 // Add 5s grace for clock skew
+                    new Date(auction.locked_until).getTime() > Date.now()
                       ? "is-fetching"
                       : ""
                   }`}
@@ -690,8 +688,7 @@ export default function Dashboard() {
 
                         const isFetching =
                           auction.locked_until &&
-                          new Date(auction.locked_until).getTime() >
-                            Date.now() - 5000;
+                          new Date(auction.locked_until).getTime() > Date.now();
 
                         return (
                           <>
