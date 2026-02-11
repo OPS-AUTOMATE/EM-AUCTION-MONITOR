@@ -58,7 +58,7 @@ class BidspotterAdapter(BaseAuctionAdapter):
                 raw_time_str = ""
 
                 # 1. Title
-                # Strategy A: Strict XPath
+                # Strategy A: User XPath
                 item_name = await get_text_safe("xpath=/html/body/div[1]/main/div/div[1]/div/div[2]/div/h1")
                 if not item_name:
                     # Strategy B: Common H1
@@ -71,9 +71,12 @@ class BidspotterAdapter(BaseAuctionAdapter):
                 logger.info(f"[Bidspotter] Extracted Title: {item_name}")
 
                 # 2. Current Bid / Price
-                # Strategy A: Strict Price XPath
-                price_xpath = "/html/body/div[1]/main/div/div[6]/div[1]/div/div[2]/div[2]/div[1]/form/div/div[1]/div/div[2]/span/span[1]/span"
+                # Strategy A: User XPath
+                price_xpath = "/html/body/div[1]/main/div/div[6]/div[1]/div/div[2]/div[2]/div[1]/form/div/div[1]/div/div[2]/span/span[1]/span/strong"
                 price_text = await get_text_safe(f"xpath={price_xpath}")
+                if not price_text:
+                    price_text = await get_text_safe("xpath=/html/body/div[1]/main/div/div[6]/div[1]/div/div[2]/div[2]/div[1]/form/div/div[1]/div/div[2]/span/span[1]/span")
+
                 if not price_text:
                     # Strategy B: Common Price classes
                     price_text = await get_text_safe(".current-bid, .lot-price, .price-value, .lot-details__bid-box-current-bid-amount")
@@ -87,7 +90,7 @@ class BidspotterAdapter(BaseAuctionAdapter):
                     logger.warning("[Bidspotter] Price not found.")
 
                 # 3. Location
-                # Strategy A: Strict Location XPath
+                # Strategy A: User XPath
                 loc_xpath = "/html/body/div[1]/main/div/div[6]/div[1]/div/div[2]/div[6]/div/div[2]/div[2]/strong/span"
                 loc_text = await get_text_safe(f"xpath={loc_xpath}")
                 if not loc_text:
@@ -109,7 +112,7 @@ class BidspotterAdapter(BaseAuctionAdapter):
                     logger.warning("[Bidspotter] Location not found.")
 
                 # 4. Bidders Count
-                # Strategy A: User provided XPath
+                # Strategy A: User XPath
                 bid_xpath = "/html/body/div[1]/main/div/div[6]/div[1]/div/div[2]/div[2]/div[1]/form/div/div[1]/div/span/span/span[2]/span[1]/span[1]/span"
                 bid_text = await get_text_safe(f"xpath={bid_xpath}")
                 if not bid_text:
@@ -126,8 +129,8 @@ class BidspotterAdapter(BaseAuctionAdapter):
 
                 # 5. End Time
                 # Strategy: Locate the time element and extract raw string
-                time_xpath_1 = "/html/body/div[2]/main/div/div[6]/div[1]/div/div[2]/div[6]/div/div[1]/div[2]/div[2]/div/div/span"
-                time_xpath_2 = "/html/body/div[1]/main/div/div[6]/div[1]/div/div[2]/div[6]/div/div[1]/div[2]/div[2]/div/div/span"
+                time_xpath_1 = "/html/body/div[1]/main/div/div[6]/div[1]/div/div[2]/div[6]/div/div[1]/div[2]/div[2]/div/div/span"
+                time_xpath_2 = "/html/body/div[2]/main/div/div[6]/div[1]/div/div[2]/div[6]/div/div[1]/div[2]/div[2]/div/div/span"
                 
                 time_el = page.locator(f"xpath={time_xpath_1}")
                 if await time_el.count() == 0:
