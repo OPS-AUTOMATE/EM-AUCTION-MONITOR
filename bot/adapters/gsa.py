@@ -82,10 +82,11 @@ class GsaAdapter(BaseAuctionAdapter):
             # Prepare Launch options (NO PROXY for GSA as requested)
             launch_opts = {"headless": True}
             
-            # proxy_conf = self.get_proxy_config()
-            # if proxy_conf:
-            #     launch_opts["proxy"] = proxy_conf
-            #     logger.info(f"[GSA-Browser] Using Proxy: {proxy_conf['server']}")
+            # Enable Proxy rotation for GSA too, since server IP is blocked
+            proxy_conf = self.get_proxy_config()
+            if proxy_conf:
+                launch_opts["proxy"] = proxy_conf
+                logger.info(f"[GSA-Browser] Using Proxy: {proxy_conf['server']}")
 
             browser = await p.chromium.launch(**launch_opts)
             context = await browser.new_context(
