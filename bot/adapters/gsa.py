@@ -40,8 +40,28 @@ class GsaAdapter(BaseAuctionAdapter):
         api_url = f"https://gsaauctions.gov/gsaauctions/aucindx/?suid={suid}"
         logger.info(f"[GSA-API] Fetching: {api_url}")
         
+        
+        proxies = None
+        proxy_conf = self.get_proxy_config()
+        if proxy_conf:
+            p_server = proxy_conf.get("server")
+            p_user = proxy_conf.get("username")
+            p_pass = proxy_conf.get("password")
+            
+            if p_server:
+                # Construct proxy URL for httpx
+                if p_user and p_pass:
+                     # Remove 'http://' prefix if present to avoid duplication if user added it
+                     clean_server = p_server.replace("http://", "").replace("https://", "")
+                     proxy_url = f"http://{p_user}:{p_pass}@{clean_server}"
+                else:
+                     proxy_url = p_server if p_server.startswith("http") else f"http://{p_server}"
+                
+                proxies = {"http://": proxy_url, "https://": proxy_url}
+                logger.info(f"[GSA-API] Using Proxy: {p_server}")
+
         try:
-            async with httpx.AsyncClient(timeout=15.0, verify=False) as client:
+            async with httpx.AsyncClient(timeout=15.0, verify=False, proxies=proxies) as client:
                 # Add headers to mimic a browser to avoid 403
                 headers = {
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
