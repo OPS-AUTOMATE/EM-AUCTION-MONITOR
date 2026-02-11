@@ -17,7 +17,7 @@ services:
 
   dashboard:
     build:
-      context: "./dashboard"
+      context: "./Dashboard"
     ports:
       - "3000:3000"
     restart: always
