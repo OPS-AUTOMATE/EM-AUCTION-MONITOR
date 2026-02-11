@@ -29,15 +29,16 @@ class BidspotterAdapter(BaseAuctionAdapter):
             )
             page = await context.new_page()
 
-            # OPTIMIZATION: Block heavy resources
+            # OPTIMIZATION: Block images/media but KEEP stylesheets for JS layout
             await page.route("**/*", lambda route: route.abort() 
-                if route.request.resource_type in ["image", "media", "font", "stylesheet"] 
+                if route.request.resource_type in ["image", "media", "font"] 
                 else route.continue_())
             
             try:
                 logger.info(f"[Bidspotter] Fetching: {url}")
-                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-                await asyncio.sleep(5) # Wait for JS to settle
+                # Use 'load' for Bidspotter as it's a heavy SPA
+                await page.goto(url, wait_until="load", timeout=60000)
+                await asyncio.sleep(3) # Wait for JS to settle
 
                 # Helper to safely get text content
                 async def get_text_safe(selector: str) -> str:
@@ -64,7 +65,7 @@ class BidspotterAdapter(BaseAuctionAdapter):
                     item_name = await get_text_safe("h1")
                 if not item_name:
                     # Strategy C: Lot Details Class
-                    item_name = await get_text_safe(".lot-name, .lot-title, h1.lot-details__title")
+                    item_name = await get_text_safe(".lot-name, .lot-title, h1.lot-details__title, .lot-details h1")
                 
                 if not item_name: item_name = "Unknown Item"
                 logger.info(f"[Bidspotter] Extracted Title: {item_name}")
@@ -75,7 +76,7 @@ class BidspotterAdapter(BaseAuctionAdapter):
                 price_text = await get_text_safe(f"xpath={price_xpath}")
                 if not price_text:
                     # Strategy B: Common Price classes
-                    price_text = await get_text_safe(".current-bid, .lot-price, .price-value")
+                    price_text = await get_text_safe(".current-bid, .lot-price, .price-value, .lot-details__bid-box-current-bid-amount")
                 
                 if price_text:
                     logger.info(f"[Bidspotter] Extracted Price Text: {price_text}")
@@ -91,7 +92,7 @@ class BidspotterAdapter(BaseAuctionAdapter):
                 loc_text = await get_text_safe(f"xpath={loc_xpath}")
                 if not loc_text:
                     # Strategy B: Broad Location search
-                    loc_text = await get_text_safe(".lot-location, .location-text, .venue-location")
+                    loc_text = await get_text_safe(".lot-location, .location-text, .venue-location, address, .lot-details__address")
                 
                 if loc_text:
                     logger.info(f"[Bidspotter] Extracted Location Text: {loc_text}")
@@ -131,6 +132,10 @@ class BidspotterAdapter(BaseAuctionAdapter):
                 time_el = page.locator(f"xpath={time_xpath_1}")
                 if await time_el.count() == 0:
                     time_el = page.locator(f"xpath={time_xpath_2}")
+                
+                # Fallback: General search for time elements
+                if await time_el.count() == 0:
+                    time_el = page.locator("time, .time-remaining, .countdown, [class*='time'], [class*='countdown']")
                 
                 if await time_el.count() > 0:
                     raw_time_str = await time_el.first.get_attribute("datetime")
@@ -233,8 +238,10 @@ class BidspotterAdapter(BaseAuctionAdapter):
                     except: pass
                 
                 # If area_text is empty, fallback to a broader but still safe check
-                if not area_text and any(x in (await page.content()).lower() for x in ["auction closed", "bidding has ended"]):
-                    status = "expired"
+                if not area_text:
+                    page_content = (await page.content()).lower()
+                    if any(x in page_content for x in ["auction closed", "bidding has ended"]):
+                        status = "expired"
 
                 res = {
                     "item_name": item_name[:200],
