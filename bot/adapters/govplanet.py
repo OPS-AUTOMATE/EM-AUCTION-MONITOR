@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from playwright.async_api import async_playwright
 from .base_adapter import BaseAuctionAdapter
@@ -145,6 +146,33 @@ class GovPlanetAdapter(BaseAuctionAdapter):
                         city = parts[0].strip()
                         state = parts[1].strip()
 
+                # 6. Calculate ISO closing time
+                closing_time_iso = None
+                if time_text:
+                    try:
+                        clean_time = time_text.strip()
+                        # Handle "Feb 17, time TBD" or just "Feb 17"
+                        # Regex to find Month and Day
+                        date_match = re.search(r'([A-Z][a-z]{2})\s*(\d{1,2})', clean_time, re.I)
+                        if date_match:
+                            month_str = date_match.group(1)
+                            day_val = int(date_match.group(2))
+                            # Default to current year or next if month already passed? 
+                            # Usually these are future auctions.
+                            now = datetime.now()
+                            # Minimal parsing
+                            months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+                            month_idx = months.index(month_str.capitalize()) + 1
+                            
+                            dt = datetime(now.year, month_idx, day_val, 0, 0, 0)
+                            # If the date is very far in the past (e.g. Dec and it's Jan), move to next year
+                            if dt < now - timedelta(days=30):
+                                dt = dt.replace(year=now.year + 1)
+                            
+                            closing_time_iso = dt.isoformat()
+                    except:
+                        pass
+
                 return {
                     "item_name": item_name.strip()[:200],
                     "current_bid": current_bid,
@@ -152,6 +180,7 @@ class GovPlanetAdapter(BaseAuctionAdapter):
                     "state": state,
                     "total_bidders": int(re.sub(r'\D', '', bids_text)) if bids_text and re.sub(r'\D', '', bids_text) else 0,
                     "time_remaining_str": time_text.strip(),
+                    "closing_time": closing_time_iso,
                     "website_name": "GovPlanet",
                     "status": "active"
                 }

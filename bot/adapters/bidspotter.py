@@ -161,7 +161,7 @@ class BidspotterAdapter(BaseAuctionAdapter):
                         # Text Format Part
                         if not dt:
                             try:
-                                tz_map = {"GMT":0,"UTC":0,"EST":-5,"EDT":-4,"CST":-6,"CDT":-5,"MST":-7,"MDT":-6,"PST":-8,"PDT":-7}
+                                tz_map = {"GMT":0,"UTC":0,"EST":-5,"EDT":-4,"CST":-6,"CDT":-5,"MST":-7,"MDT":-6,"PST":-8,"PDT":-7, "ET":-5}
                                 offset = 0
                                 clean_text = raw_time_str
                                 for k, v in tz_map.items():
@@ -169,7 +169,7 @@ class BidspotterAdapter(BaseAuctionAdapter):
                                         offset = v
                                         clean_text = clean_text.replace(k, "").strip()
                                         break
-                                for fmt in ["%b %d, %Y %I:%M%p", "%b %d, %Y %I:%M %p", "%Y-%m-%d %H:%M:%S"]:
+                                for fmt in ["%b %d, %Y %I:%M%p", "%b %d, %Y %I:%M %p", "%Y-%m-%d %H:%M:%S", "%b %d, %Y %H:%M"]:
                                     try:
                                         dt = datetime.strptime(clean_text, fmt)
                                         dt = dt.replace(tzinfo=timezone(timedelta(hours=offset)))
@@ -195,24 +195,44 @@ class BidspotterAdapter(BaseAuctionAdapter):
                             end_time_pkt = dt.astimezone(pkt_tz).isoformat()
                 
                 if not end_time_pkt:
+                    # Final fallback: Look for date in page content
+                    date_match = re.search(r'([A-Z][a-z]{2}\s+\d{1,2},\s+\d{4}\s+\d{1,2}:\d{2}\s*[ap]m)', await page.content(), re.I)
+                    if date_match:
+                        raw_time_str = date_match.group(1)
+                        try:
+                            dt = datetime.strptime(raw_time_str, "%b %d, %Y %I:%M %p")
+                            # Assume ET if not specified
+                            dt = dt.replace(tzinfo=timezone(timedelta(hours=-5)))
+                            pkt_tz = timezone(timedelta(hours=5))
+                            end_time_pkt = dt.astimezone(pkt_tz).isoformat()
+                        except: pass
+
+                if not end_time_pkt:
                     logger.warning(f"[Bidspotter] Could not parse closing time from: {raw_time_str}")
 
                 # 6. Status check
                 status = "active"
-                content_lower = (await page.content()).lower()
-                # More robust status check: only if it's NOT a countdown string
-                if any(x in content_lower for x in ["auction closed", "bidding has ended", "lot closed"]):
+                # Check bidding container first to avoid sidebar false positives
+                bid_area = page.locator(".lot-details__bidding, #lotDetailsBidding, .bidding-container")
+                area_text = ""
+                if await bid_area.count() > 0:
+                    area_text = (await bid_area.first.inner_text()).lower()
+                else:
+                    area_text = (await page.content()).lower()
+
+                if any(x in area_text for x in ["auction closed", "bidding has ended", "lot closed", "sold for"]):
                     status = "expired"
                 
                 # OVERRIDE: If we extracted a valid future date, it's definitely ACTIVE
                 if end_time_pkt:
                     try:
                         ct = datetime.fromisoformat(end_time_pkt)
-                        # Compare with now in the same timezone
                         if ct > datetime.now(ct.tzinfo):
                             status = "active"
                         else:
-                            status = "expired"
+                            # Verify with "Ends in" or similar text if it's very close
+                            if "ends in" in area_text or "started" in area_text:
+                                status = "active"
                     except: pass
                 
                 if status == "expired" and not end_time_pkt:
