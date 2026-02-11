@@ -68,7 +68,16 @@ async def run_monitoring_engine(poll_interval: int = 5):
                     prev_status = previous_states.get(item_id)
                     
                     # 2. AUTO-EXPIRATION CHECK (Works even if Paused)
-                    if current_status != 'expired' and closing_time_str:
+                    # Only auto-expire if NOT currently locked (fetching)
+                    locked_until = item.get('locked_until')
+                    is_locked = False
+                    if locked_until:
+                        try:
+                            if datetime.fromisoformat(locked_until.replace("Z", "+00:00")) > now_utc:
+                                is_locked = True
+                        except: pass
+
+                    if current_status != 'expired' and closing_time_str and not is_locked:
                         try:
                             ct = datetime.fromisoformat(closing_time_str.replace("Z", "+00:00"))
                             if ct < now_utc:
@@ -76,6 +85,8 @@ async def run_monitoring_engine(poll_interval: int = 5):
                                 supabase.table("auction_items").update({"status": "expired"}).eq("id", item_id).execute()
                                 current_status = 'expired'
                         except: pass
+                    elif is_locked and current_status != 'expired':
+                        logger.debug(f"Item {item_id[:8]} is LOCKED. Skipping auto-expiration check.")
 
                     # 3. STATUS CHANGED (or NEW ITEM)
                     if prev_status != current_status:

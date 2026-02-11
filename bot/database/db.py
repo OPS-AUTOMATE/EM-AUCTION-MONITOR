@@ -41,9 +41,9 @@ class DatabaseLayer:
 
     async def fetch_all_items_minimal(self) -> List[Dict[str, Any]]:
         """
-        Fetches id, status, and closing_time for all items to check for auto-expirations.
+        Fetches id, status, closing_time, and locked_until for all items to check for auto-expirations.
         """
-        response = self.supabase.table("auction_items").select("id, status, closing_time").execute()
+        response = self.supabase.table("auction_items").select("id, status, closing_time, locked_until").execute()
         return response.data
 
 

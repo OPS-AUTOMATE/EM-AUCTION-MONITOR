@@ -169,6 +169,8 @@ class BidspotterAdapter(BaseAuctionAdapter):
                                         offset = v
                                         clean_text = clean_text.replace(k, "").strip()
                                         break
+                                
+                                clean_text = clean_text.upper()
                                 for fmt in ["%b %d, %Y %I:%M%p", "%b %d, %Y %I:%M %p", "%Y-%m-%d %H:%M:%S", "%b %d, %Y %H:%M"]:
                                     try:
                                         dt = datetime.strptime(clean_text, fmt)
@@ -200,7 +202,7 @@ class BidspotterAdapter(BaseAuctionAdapter):
                     if date_match:
                         raw_time_str = date_match.group(1)
                         try:
-                            dt = datetime.strptime(raw_time_str, "%b %d, %Y %I:%M %p")
+                            dt = datetime.strptime(raw_time_str.upper(), "%b %d, %Y %I:%M %p")
                             # Assume ET if not specified
                             dt = dt.replace(tzinfo=timezone(timedelta(hours=-5)))
                             pkt_tz = timezone(timedelta(hours=5))
@@ -217,26 +219,22 @@ class BidspotterAdapter(BaseAuctionAdapter):
                 area_text = ""
                 if await bid_area.count() > 0:
                     area_text = (await bid_area.first.inner_text()).lower()
-                else:
-                    area_text = (await page.content()).lower()
-
-                if any(x in area_text for x in ["auction closed", "bidding has ended", "lot closed", "sold for"]):
+                
+                # Keywords that confirm it's DEFINITELY closed
+                if any(x in area_text for x in ["lot closed", "sold for", "bidding has ended"]):
                     status = "expired"
                 
-                # OVERRIDE: If we extracted a valid future date, it's definitely ACTIVE
+                # OVERRIDE: If we have a future date, trust the date over keywords (which might be from other lots)
                 if end_time_pkt:
                     try:
                         ct = datetime.fromisoformat(end_time_pkt)
                         if ct > datetime.now(ct.tzinfo):
                             status = "active"
-                        else:
-                            # Verify with "Ends in" or similar text if it's very close
-                            if "ends in" in area_text or "started" in area_text:
-                                status = "active"
                     except: pass
                 
-                if status == "expired" and not end_time_pkt:
-                    end_time_pkt = datetime.now(timezone.utc).isoformat()
+                # If area_text is empty, fallback to a broader but still safe check
+                if not area_text and any(x in (await page.content()).lower() for x in ["auction closed", "bidding has ended"]):
+                    status = "expired"
 
                 res = {
                     "item_name": item_name[:200],
