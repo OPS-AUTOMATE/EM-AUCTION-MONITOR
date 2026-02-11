@@ -6,7 +6,11 @@ from typing import Optional, Dict, Any
 from playwright.async_api import async_playwright
 from .base_adapter import BaseAuctionAdapter
 
+import os
+
 logger = logging.getLogger(__name__)
+
+storage_path = "mazree_session.json"
 
 class MazreeAdapter(BaseAuctionAdapter):
     """
@@ -23,15 +27,63 @@ class MazreeAdapter(BaseAuctionAdapter):
                 logger.info(f"[Mazree] Using Proxy: {proxy_conf['server']}")
 
             browser = await p.chromium.launch(**launch_opts)
-            context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
-            )
+            
+            # SESSION PERSISTENCE
+            context_args = {
+                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+            }
+            if os.path.exists(storage_path):
+                context_args["storage_state"] = storage_path
+                logger.debug("[Mazree] Using saved session state.")
+
+            context = await browser.new_context(**context_args)
             page = await context.new_page()
 
             # OPTIMIZATION: Block heavy assets but allow stylesheets (safer for SPA)
             await page.route("**/*", lambda route: route.abort() 
                 if route.request.resource_type in ["image", "media", "font"] 
                 else route.continue_())
+
+            # Helper for login
+            async def perform_login():
+                email = os.getenv("MAZREE_EMAIL")
+                password = os.getenv("MAZREE_PASSWORD")
+                if not email or not password:
+                    logger.warning("[Mazree] Login required but credentials missing in .env (MAZREE_EMAIL/PASSWORD)")
+                    return False
+                
+                logger.info("[Mazree] Attempting login flow...")
+                try:
+                    await page.goto("https://www.mazree.com/SignIn", wait_until="domcontentloaded", timeout=60000)
+                    
+                    # 1. Fill Email
+                    await page.wait_for_selector("#email", timeout=15000)
+                    await page.fill("#email", email)
+                    
+                    # 2. Click Next
+                    await page.click('button:has-text("Next")')
+                    
+                    # 3. Wait for Password field
+                    await page.wait_for_selector('input[type="password"]', timeout=15000)
+                    await page.fill('input[type="password"]', password)
+                    
+                    # 4. Final Click (Sign In)
+                    await page.click('button:has-text("Sign In"), button:has-text("Next")')
+                    
+                    # Wait for redirect
+                    await page.wait_for_load_state("networkidle", timeout=30000)
+                    
+                    # Verify login by checking for "Sign Out"
+                    if "Sign Out" in (await page.content()):
+                        logger.info("[Mazree] Login successful. Saving session.")
+                        await context.storage_state(path=storage_path)
+                        return True
+                    else:
+                        logger.error("[Mazree] Login failed - 'Sign Out' link not found.")
+                        return False
+                except Exception as e:
+                    logger.error(f"[Mazree] Login internal error: {e}")
+                    return False
 
             try:
                 logger.info(f"[Mazree] Fetching: {url} (Long Timeout)")
@@ -41,7 +93,12 @@ class MazreeAdapter(BaseAuctionAdapter):
                 # Check for redirect to Login
                 current_url = page.url
                 if "/SignIn" in current_url or "login" in current_url.lower():
-                    logger.warning(f"[Mazree] Redirected to Login Page! Content might be restricted: {current_url}")
+                    logger.info(f"[Mazree] Redirected to Login Page! Starting login flow.")
+                    if await perform_login():
+                        # Re-navigate to the item page after login
+                        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                    else:
+                        logger.warning("[Mazree] Proceeding without login (content may be restricted).")
                 
                 # Manual wait for content to appear (Listing detail or at least the app container)
                 try:
@@ -49,7 +106,7 @@ class MazreeAdapter(BaseAuctionAdapter):
                 except:
                     logger.warning("[Mazree] Content selector timeout.")
 
-                await asyncio.sleep(12) # Heavy SPA stabilization (Angular can be slow to render)
+                await asyncio.sleep(8) # Shortened slightly since we have login verification
 
                 # Helper to safely get text content
                 async def get_text_safe(selector: str, use_xpath: bool = False) -> str:
