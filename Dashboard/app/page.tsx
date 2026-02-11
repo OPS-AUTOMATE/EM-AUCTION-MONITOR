@@ -553,24 +553,16 @@ export default function Dashboard() {
       return matchesSearch && matchesSource && matchesTab;
     })
     .sort((a, b) => {
-      // Priority: Active/Paused FIRST, Expired LAST
-      if (a.status !== "expired" && b.status === "expired") return -1;
-      if (a.status === "expired" && b.status !== "expired") return 1;
+      // Sort by Closing Time Descending (Future -> Past)
+      // Treats 'syncing' items as far future to keep them at top
+      const tA = a.closing_time
+        ? new Date(a.closing_time).getTime()
+        : Number.MAX_SAFE_INTEGER;
+      const tB = b.closing_time
+        ? new Date(b.closing_time).getTime()
+        : Number.MAX_SAFE_INTEGER;
 
-      // If both are expired, sort by closing time (newest ended first)
-      if (a.status === "expired" && b.status === "expired") {
-        const tA = a.closing_time ? new Date(a.closing_time).getTime() : 0;
-        const tB = b.closing_time ? new Date(b.closing_time).getTime() : 0;
-        return tB - tA;
-      }
-
-      // If both are active/paused, sort by closing_time (soonest closing first)
-      if (!a.closing_time && !b.closing_time) return 0;
-      if (!a.closing_time) return -1; // Keep syncing items at top
-      if (!b.closing_time) return 1;
-      return (
-        new Date(a.closing_time).getTime() - new Date(b.closing_time).getTime()
-      );
+      return tB - tA;
     });
 
   return (
