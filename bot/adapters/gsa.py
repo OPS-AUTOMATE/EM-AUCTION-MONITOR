@@ -16,13 +16,23 @@ class GsaAdapter(BaseAuctionAdapter):
     """
 
     async def fetch(self, url: str, preferred_method: int = 0) -> Optional[Dict[str, Any]]:
-        # 1. API Mode (SUID links)
-        suid_match = re.search(r"suid=([A-Z0-9]+)", url, re.I)
+        # 1. API Mode (SUID or Preview ID)
+        suid_match = re.search(r"[?&]suid=([A-Z0-9]+)", url, re.I)
+        preview_match = re.search(r"/(?:preview|auctions/preview)/(\d+)", url, re.I)
+        
+        suid = None
         if suid_match:
-            data = await self._fetch_via_api(suid_match.group(1), url)
+            suid = suid_match.group(1)
+        elif preview_match:
+            # GSA's preview ID often works as SUID for API calls
+            suid = preview_match.group(1) 
+
+        if suid:
+            logger.info(f"[GSA] Detected ID: {suid}, attempting API fetch.")
+            data = await self._fetch_via_api(suid, url)
             if data: return data
 
-        # 2. Browser Mode (Preview links)
+        # 2. Browser Mode (Fallback)
         return await self._fetch_via_browser(url)
 
     async def _fetch_via_api(self, suid: str, original_url: str) -> Optional[Dict[str, Any]]:
