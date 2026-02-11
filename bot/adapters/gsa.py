@@ -94,7 +94,9 @@ class GsaAdapter(BaseAuctionAdapter):
                         logger.error(f"[GSA-API] JSON Parse Error: {e}")
                         logger.debug(f"[GSA-API] Response Text: {response.text[:500]}")
                         return None
-        except: return None
+        except Exception as e:
+             logger.error(f"[GSA-API] Request Failed: {e}")
+             return None
         return None
 
     async def _fetch_via_browser(self, url: str) -> Optional[Dict[str, Any]]:
