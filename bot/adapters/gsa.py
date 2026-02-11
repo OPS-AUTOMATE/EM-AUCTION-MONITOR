@@ -72,6 +72,7 @@ class GsaAdapter(BaseAuctionAdapter):
                         }
                     except Exception as e:
                         logger.error(f"[GSA-API] JSON Parse Error: {e}")
+                        logger.debug(f"[GSA-API] Response Text: {response.text[:500]}")
                         return None
         except: return None
         return None

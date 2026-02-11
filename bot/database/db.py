@@ -93,6 +93,18 @@ class DatabaseLayer:
         interval_secs = int((next_fetch - now).total_seconds())
         logger.info(f"[DB] Item {item_id[:8]}: Tier={FetchTier(tier).name}, Refresh in {interval_secs}s")
 
+        # --- CRITICAL: Do not overwrite 'paused' status from user ---
+        try:
+            current_db_resp = self.supabase.table("auction_items").select("status").eq("id", item_id).execute()
+            if current_db_resp.data:
+                db_status = current_db_resp.data[0].get("status")
+                # If user paused it while we were scraping, keep it paused.
+                # Unless the new status is 'expired' (priority over paused).
+                if db_status == "paused" and status != "expired":
+                    status = "paused"
+        except Exception as e:
+            logger.warning(f"[DB] Could not verify current status for {item_id}: {e}")
+
         payload = {
             **scraped_data,
             "session_id": session_id,
@@ -101,7 +113,7 @@ class DatabaseLayer:
             "last_scraped_at": now.isoformat(),
             "status": status,
             "error_message": None,
-            "locked_until": None
+            "locked_until": None  # Always release lock
         }
         
         self.supabase.table("auction_items").update(payload).eq("id", item_id).execute()
