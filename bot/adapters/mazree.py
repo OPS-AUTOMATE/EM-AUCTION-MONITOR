@@ -27,18 +27,24 @@ class MazreeAdapter(BaseAuctionAdapter):
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
             )
             page = await context.new_page()
-            
+
+            # OPTIMIZATION: Block heavy/tracking resources to prevent timeouts
+            await page.route("**/*", lambda route: route.abort() 
+                if route.request.resource_type in ["image", "media", "font", "stylesheet"] 
+                else route.continue_())
+
             try:
                 logger.info(f"[Mazree] Fetching: {url}")
-                await page.goto(url, wait_until="networkidle", timeout=45000)
+                # Use domcontentloaded for faster initial load, then wait for content
+                await page.goto(url, wait_until="domcontentloaded", timeout=45000)
                 
                 # Wait for main content or title
                 try:
-                    await page.wait_for_selector('h3, app-buyer-listing-detail, app-guest-listing-detail', timeout=30000)
+                    await page.wait_for_selector('h3, app-buyer-listing-detail, app-guest-listing-detail, .listing-detail', timeout=20000)
                 except:
                     logger.warning("[Mazree] Timeout waiting for content.")
 
-                await asyncio.sleep(5) # Stabilization
+                await asyncio.sleep(5) # Stabilization for SPA rendering
 
                 # Helper to safely get text content
                 async def get_text_safe(selector: str, use_xpath: bool = False) -> str:
