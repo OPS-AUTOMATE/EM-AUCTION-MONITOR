@@ -54,7 +54,10 @@ class MazreeAdapter(BaseAuctionAdapter):
                 
                 logger.info("[Mazree] Attempting login flow...")
                 try:
-                    await page.goto("https://www.mazree.com/SignIn", wait_until="domcontentloaded", timeout=60000)
+                    await page.goto("https://www.mazree.com/SignIn", wait_until="commit", timeout=60000)
+                    try:
+                        await page.wait_for_load_state("domcontentloaded", timeout=20000)
+                    except: pass
                     await asyncio.sleep(2)
                     
                     # 1. Fill Email
@@ -112,15 +115,22 @@ class MazreeAdapter(BaseAuctionAdapter):
 
             try:
                 logger.info(f"[Mazree] Fetching: {url}")
-                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                await page.goto(url, wait_until="commit", timeout=60000)
                 
-                # Check for login redirection
-                await asyncio.sleep(5) # Allow SPA to settle
+                # Check for login redirection or presence of login fields early
+                try:
+                    await page.wait_for_load_state("domcontentloaded", timeout=30000)
+                except:
+                    logger.debug("[Mazree] domcontentloaded timeout, continuing to check content...")
+
                 if "/SignIn" in page.url or await page.locator("#email").count() > 0:
                     logger.info("[Mazree] Login required for this listing.")
                     if await perform_login():
                         logger.info(f"[Mazree] Login success, re-navigating to: {url}")
-                        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                        await page.goto(url, wait_until="commit", timeout=60000)
+                        try:
+                            await page.wait_for_load_state("domcontentloaded", timeout=20000)
+                        except: pass
                         await asyncio.sleep(5)
                 
                 # Final wait for listing content
@@ -198,12 +208,11 @@ class MazreeAdapter(BaseAuctionAdapter):
                     else:
                         city = target_line
 
-                # 4. Seller
-                seller = "Unknown Seller"
+                # 4. Seller (Internal extraction without saving to DB yet)
                 try:
                     seller_el = page.locator("a.font-poppins-medium.text-lg").first
                     if await seller_el.count() > 0:
-                        seller = (await seller_el.inner_text()).strip()
+                        _ = (await seller_el.inner_text()).strip()
                 except: pass
 
                 # 5. Time Remaining / Closing Time
