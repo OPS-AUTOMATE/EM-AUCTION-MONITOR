@@ -55,89 +55,109 @@ class MazreeAdapter(BaseAuctionAdapter):
                 logger.info("[Mazree] Attempting login flow...")
                 try:
                     await page.goto("https://www.mazree.com/SignIn", wait_until="domcontentloaded", timeout=60000)
+                    await asyncio.sleep(2)
                     
                     # 1. Fill Email
                     await page.wait_for_selector("#email", timeout=15000)
                     await page.fill("#email", email)
+                    await asyncio.sleep(1)
                     
                     # 2. Click Next
-                    await page.click('button:has-text("Next")')
+                    next_btn = page.locator('button:has-text("Next")')
+                    await next_btn.wait_for(state="visible", timeout=15000)
+                    # Angular enablement check
+                    for _ in range(10):
+                        if await next_btn.is_enabled(): break
+                        await asyncio.sleep(0.5)
+                    await next_btn.click()
                     
                     # 3. Wait for Password field
-                    await page.wait_for_selector('input[type="password"]', timeout=15000)
-                    await page.fill('input[type="password"]', password)
+                    pw_field = page.locator('input[type="password"]')
+                    await pw_field.wait_for(state="visible", timeout=15000)
+                    await pw_field.fill(password)
+                    await asyncio.sleep(1)
                     
-                    # 4. Final Click (Sign In)
-                    await page.click('button:has-text("Sign In"), button:has-text("Next")')
+                    # 4. Final Submission (Enter is more reliable for triggering Angular form submission)
+                    await pw_field.press("Enter")
                     
-                    # Wait for redirect
-                    await page.wait_for_load_state("networkidle", timeout=30000)
-                    
-                    # Verify login by checking for "Sign Out"
-                    if "Sign Out" in (await page.content()):
-                        logger.info("[Mazree] Login successful. Saving session.")
+                    # Wait for redirect or success markers
+                    try:
+                        # Success markers: User menu, "Sign Out", or dashboard app-container
+                        await page.wait_for_selector('button:has-text("Sign Out"), .app-container, .listing-detail', timeout=20000)
+                        logger.info(f"[Mazree] Login successful. Current URL: {page.url}")
                         await context.storage_state(path=storage_path)
                         return True
-                    else:
-                        logger.error("[Mazree] Login failed - 'Sign Out' link not found.")
+                    except:
+                        # Fallback: check if the "Sign In" button is still there
+                        logger.warning("[Mazree] Post-login marker timeout, checking current state.")
+                        if "/SignIn" in page.url:
+                            # Try explicit button click as last resort
+                            signin_btn = page.locator('button:has-text("Sign In"), button:has-text("Next")').first
+                            if await signin_btn.is_visible() and await signin_btn.is_enabled():
+                                await signin_btn.click(force=True)
+                                await asyncio.sleep(5)
+                        
+                        content = await page.content()
+                        if "Sign Out" in content or ".app-container" in content:
+                            logger.info("[Mazree] Login successful (detected via content).")
+                            await context.storage_state(path=storage_path)
+                            return True
+                        
+                        logger.error(f"[Mazree] Login failed. URL: {page.url}")
                         return False
+
                 except Exception as e:
                     logger.error(f"[Mazree] Login internal error: {e}")
                     return False
 
             try:
-                logger.info(f"[Mazree] Fetching: {url} (Long Timeout)")
-                # 'commit' is safer for sites that might have heavy background tracking
-                await page.goto(url, wait_until="commit", timeout=90000)
+                logger.info(f"[Mazree] Fetching: {url}")
+                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
                 
-                # Check for redirect to Login
-                current_url = page.url
-                if "/SignIn" in current_url or "login" in current_url.lower():
-                    logger.info(f"[Mazree] Redirected to Login Page! Starting login flow.")
+                # Check for login redirection
+                await asyncio.sleep(5) # Allow SPA to settle
+                if "/SignIn" in page.url or await page.locator("#email").count() > 0:
+                    logger.info("[Mazree] Login required for this listing.")
                     if await perform_login():
-                        # Re-navigate to the item page after login
+                        logger.info(f"[Mazree] Login success, re-navigating to: {url}")
                         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-                    else:
-                        logger.warning("[Mazree] Proceeding without login (content may be restricted).")
+                        await asyncio.sleep(5)
                 
-                # Manual wait for content to appear (Listing detail or at least the app container)
+                # Final wait for listing content
                 try:
-                    await page.wait_for_selector('h3, .listing-detail, .app-container, body', timeout=60000)
+                    await page.wait_for_selector("h3, .listing-detail", timeout=20000)
                 except:
-                    logger.warning("[Mazree] Content selector timeout.")
+                    logger.warning("[Mazree] Listing content not found within timeout.")
 
-                await asyncio.sleep(8) # Shortened slightly since we have login verification
+                await asyncio.sleep(10) # Heavy Angular wait for dynamic prices/timers
 
-                # Helper to safely get text content
-                async def get_text_safe(selector: str, use_xpath: bool = False) -> str:
-                   try:
-                       loc = page.locator(f"xpath={selector}" if use_xpath else selector)
-                       if await loc.count() > 0:
-                           return await loc.first.inner_text()
-                   except: pass
-                   return ""
-
+                # Extraction logic
+                content = await page.content()
+                
                 # 1. Item Name
-                item_name = await get_text_safe("#child-of-buyer-center-section > div.flex.flex-col.align-items-center\\.\\.text-surface-800.dark\\:text-surface-50.gap-3.ng-tns-c700949049-12 > h3")
-                if not item_name:
-                    item_name = await get_text_safe("/html/body/app-root/div/div/app-user-layout/div/div/div/div/div[2]/div/app-buyer-listing-detail/div/main/section[2]/div/div[1]/h3", use_xpath=True)
-                if not item_name:
-                    item_name = await get_text_safe("#child-of-buyer-center-section h3")
-
-                # 2. Price
-                price_text = await get_text_safe("#child-of-buyer-center-section > div.flex.flex-wrap.sm\\:items-center.justify-between.gap-4.sm\\:gap-0.pb-6.border-b.border-surface-200.dark\\:border-surface-600.font-poppins-regular.leading-none.ng-tns-c700949049-12 > div:nth-child(1) > div.flex.flex-col.gap-1.ml-5\\..ng-tns-c700949049-12.ng-star-inserted > h3")
-                if not price_text:
-                    price_text = await get_text_safe("/html/body/app-root/div/div/app-user-layout/div/div/div/div/div[2]/div/app-buyer-listing-detail/div/main/section[2]/div/div[3]/div[1]/div[2]/h3", use_xpath=True)
-                
-                if not price_text or "$" not in price_text:
-                    h3s = await page.locator("h3").all()
+                item_name = "Unknown Item"
+                h3s = await page.locator("h3").all()
+                for h3 in h3s:
+                    cls = await h3.get_attribute("class") or ""
+                    if "text-4xl" in cls: # Pattern from debug
+                        item_name = (await h3.inner_text()).strip()
+                        break
+                if item_name == "Unknown Item" and h3s:
+                    # Fallback to the first H3 that isn't a price
                     for h3 in h3s:
-                        text = await h3.inner_text()
-                        if "$" in text:
-                            price_text = text
+                        text = (await h3.inner_text()).strip()
+                        if text and "$" not in text and "mazree" not in text.lower():
+                            item_name = text
                             break
-                
+
+                # 2. Current Bid
                 current_bid = 0.0
+                price_text = ""
+                for h3 in h3s:
+                    text = (await h3.inner_text()).strip()
+                    if "$" in text:
+                        price_text = text
+                        break
                 if price_text:
                     try:
                         clean_bid = re.sub(r'[^\d.]', '', price_text)
@@ -145,96 +165,99 @@ class MazreeAdapter(BaseAuctionAdapter):
                             current_bid = float(clean_bid)
                     except: pass
 
-                # 3. Location (Improved to handle 'Pick From')
-                location = "Unknown"
+                # 3. Location (City, State)
+                location_text = ""
                 try:
-                    # Try specific labels first
-                    labels = ["Location", "Pick From", "Item Location"]
-                    for label in labels:
-                        loc_el = page.locator(f"span:has-text('{label}') + span").first
-                        if await loc_el.count() > 0:
-                            possible_loc = await loc_el.inner_text()
-                            if possible_loc and "Parts" not in possible_loc and "Working" not in possible_loc:
-                                location = possible_loc
-                                break
-                    
-                    if location == "Unknown":
-                        # Fallback to broad cards
-                        location = await get_text_safe("#description-parent-div > div > div > div > div:nth-child(1) > span:nth-child(2)")
-                    
-                    # Sanity check: If location contains "Parts", it's probably wrong
-                    if location and ("Parts" in location or "Working" in location):
-                        location = "Unknown"
+                    # Search for the span containing "Pick From" and get the next sibling text
+                    pick_from = page.locator("span:has-text('Pick From') + span")
+                    if await pick_from.count() > 0:
+                        raw_html = await pick_from.first.inner_html()
+                        location_text = raw_html.replace("<br>", "\n").replace("<br/>", "\n").replace("<BR>", "\n")
+                        # Strip any other remaining tags
+                        location_text = re.sub(r"<[^>]+>", "", location_text).strip()
                 except: pass
-                
-                if not location or location == "Unknown":
-                    # Try to find "City, ST" pattern in the whole page
-                    page_text = (await page.inner_text("body"))
-                    loc_match = re.search(r"\b([A-Z][a-z]+,\s*[A-Z]{2})\b", page_text)
-                    if loc_match:
-                        location = loc_match.group(1).strip()
 
-                # Clean location
                 city, state = "Unknown", ""
-                if location and location != "Unknown":
-                    # Remove trailing punctuation
-                    location = location.strip().rstrip(",.")
-                    # Remove country if present
-                    location = re.sub(r",?\s*(United States|USA)$", "", location, flags=re.I).strip().rstrip(",")
+                if location_text:
+                    # Parse "West Valley City, Utah, United States\n84120"
+                    lines = [l.strip() for l in location_text.split("\n") if l.strip()]
+                    target_line = lines[0]
+                    if len(lines) > 1:
+                        # If first line looks like a street address (e.g., contains numbers), skip to the next
+                        if any(c.isdigit() for c in lines[0]) and "," not in lines[0]:
+                            target_line = lines[1]
                     
-                    if "," in location:
-                        parts = location.split(",")
-                        city = parts[0].strip()
-                        state = parts[1].strip()
+                    # Remove country
+                    target_line = re.sub(r",?\s*(United States|USA)$", "", target_line, flags=re.I).strip()
+                    
+                    # Look for City, State pattern
+                    match = re.search(r"([^,]+),\s*([^,]+?)(?:,\s*|$)", target_line)
+                    if match:
+                        city = match.group(1).strip()
+                        state = match.group(2).strip()
                     else:
-                        city = location
+                        city = target_line
 
-                # 4. Time Remaining (Smart Parse)
-                time_remaining = await get_text_safe("#child-of-buyer-center-section > div.flex.flex-wrap.items-center.justify-between.gap-2.md\\:gap-0.pb-6.border-b.border-surface-200.dark\\:border-surface-600.font-poppins-regular.ng-tns-c700949049-12.ng-star-inserted > span.font-poppins-regular.ng-tns-c700949049-12")
-                if not time_remaining:
-                    time_remaining = await get_text_safe("/html/body/app-root/div/div/app-guest-layout/div/div/main/app-guest-listing-detail/div/main/section[2]/div/div[2]/span[2]", use_xpath=True)
-                if not time_remaining:
-                    time_remaining = await get_text_safe("/html/body/app-root/div/div/app-user-layout/div/div/div/div/div[2]/div/app-buyer-listing-detail/div/main/section[2]/div/div[2]/span[2]", use_xpath=True)
+                # 4. Seller
+                seller = "Unknown Seller"
+                try:
+                    seller_el = page.locator("a.font-poppins-medium.text-lg").first
+                    if await seller_el.count() > 0:
+                        seller = (await seller_el.inner_text()).strip()
+                except: pass
 
-                # Status Check: Hardened
+                # 5. Time Remaining / Closing Time
+                time_remaining_str = ""
+                closing_time_iso = None
+                try:
+                    timer_el = page.locator("i.fa-clock + *")
+                    if await timer_el.count() > 0:
+                        time_remaining_str = (await timer_el.first.inner_text()).strip()
+                    else:
+                        ends_in = page.locator("span:has-text('Ends In') + span")
+                        if await ends_in.count() > 0:
+                            time_remaining_str = (await ends_in.first.inner_text()).strip()
+                except: pass
+
                 status = "active"
-                content_lower = (await page.content()).lower()
                 
-                if "closed" in content_lower or "sold" in content_lower or "ended" in content_lower:
+                # Check for explicit status badge (high priority)
+                try:
+                    status_badge = page.locator("p-tag span.p-tag-label")
+                    if await status_badge.count() > 0:
+                        badge_text = (await status_badge.first.inner_text()).lower()
+                        if any(x in badge_text for x in ["closed", "sold", "ended", "expired"]):
+                            status = "expired"
+                except: pass
+
+                if status == "active" and ("closed" in content.lower() or "sold" in content.lower() or "ended" in content.lower()):
                     status = "expired"
 
-                # If we have any parsed time, it MUST be active
-                if time_remaining and any(char.isdigit() for char in time_remaining):
-                    if "ended" not in time_remaining.lower():
+                if time_remaining_str and any(char.isdigit() for char in time_remaining_str):
+                    if "ended" not in time_remaining_str.lower():
                         status = "active"
+                        try:
+                            d, h, m, s = 0, 0, 0, 0
+                            if "Day" in time_remaining_str: d = int(re.search(r'(\d+)\s*Day', time_remaining_str, re.I).group(1))
+                            if "Hour" in time_remaining_str: h = int(re.search(r'(\d+)\s*Hour', time_remaining_str, re.I).group(1))
+                            if "Minute" in time_remaining_str: m = int(re.search(r'(\d+)\s*Minute', time_remaining_str, re.I).group(1))
+                            if "Second" in time_remaining_str: s = int(re.search(r'(\d+)\s*Second', time_remaining_str, re.I).group(1))
+                            
+                            total_s = (d * 86400) + (h * 3600) + (m * 60) + s
+                            if total_s > 0:
+                                closing_time_iso = (datetime.now(timezone.utc) + timedelta(seconds=total_s)).isoformat()
+                        except: pass
 
-                # 5. Handle "Ends In" format for closing_time calculation
-                closing_time_iso = None
-                if time_remaining and status == "active":
-                    try:
-                        # Format: "3 Days : 17 Hours : 51 Minutes : 55 Seconds"
-                        days, hours, minutes, seconds = 0, 0, 0, 0
-                        if m := re.search(r'(\d+)\s*Days?', time_remaining, re.I): days = int(m.group(1))
-                        if m := re.search(r'(\d+)\s*Hours?', time_remaining, re.I): hours = int(m.group(1))
-                        if m := re.search(r'(\d+)\s*Minutes?', time_remaining, re.I): minutes = int(m.group(1))
-                        if m := re.search(r'(\d+)\s*Seconds?', time_remaining, re.I): seconds = int(m.group(1))
-                        
-                        total_s = (days * 86400) + (hours * 3600) + (minutes * 60) + seconds
-                        if total_s > 0:
-                            closing_time_iso = (datetime.now(timezone.utc) + timedelta(seconds=total_s)).isoformat()
-                    except: pass
-                
-                # If expired, set closing time to now to stop any residual timers
                 if status == "expired":
                     closing_time_iso = datetime.now(timezone.utc).isoformat()
 
                 return {
-                    "item_name": item_name.strip()[:200] if item_name else "Unknown Item",
+                    "item_name": item_name[:200],
                     "current_bid": current_bid,
                     "city": city,
                     "state": state,
                     "closing_time": closing_time_iso,
-                    "time_remaining_str": time_remaining.strip() if time_remaining else "",
+                    "time_remaining_str": time_remaining_str,
                     "website_name": "Mazree",
                     "status": status
                 }
