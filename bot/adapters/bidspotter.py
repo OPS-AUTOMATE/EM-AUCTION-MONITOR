@@ -245,19 +245,20 @@ class BidspotterAdapter(BaseAuctionAdapter):
                 if any(x in area_text for x in ["lot closed", "sold for", "bidding has ended"]):
                     status = "expired"
                 
+                if not area_text:
+                    page_content = (await page.content()).lower()
+                    if any(x in page_content for x in ["auction closed", "bidding has ended"]):
+                        status = "expired"
+
                 # OVERRIDE: If we have a future date, trust the date over keywords (which might be from other lots)
                 if end_time_pkt:
                     try:
                         ct = datetime.fromisoformat(end_time_pkt)
                         if ct > datetime.now(ct.tzinfo):
                             status = "active"
-                    except: pass
-                
-                # If area_text is empty, fallback to a broader but still safe check
-                if not area_text:
-                    page_content = (await page.content()).lower()
-                    if any(x in page_content for x in ["auction closed", "bidding has ended"]):
-                        status = "expired"
+                            logger.info(f"[Bidspotter] Date Override: Setting status to ACTIVE (time in future)")
+                    except Exception as e:
+                        logger.warning(f"[Bidspotter] Date check error: {e}")
 
                 res = {
                     "item_name": item_name[:200],
