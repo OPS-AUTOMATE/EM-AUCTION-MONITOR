@@ -667,8 +667,7 @@ export default function Dashboard() {
                     auction.status === "expired" ? "card-ended" : ""
                   } ${
                     auction.locked_until &&
-                    new Date(auction.locked_until).getTime() >
-                      new Date().getTime()
+                    new Date(auction.locked_until).getTime() > Date.now() - 5000 // Add 5s grace for clock skew
                       ? "is-fetching"
                       : ""
                   }`}
@@ -692,7 +691,7 @@ export default function Dashboard() {
                         const isFetching =
                           auction.locked_until &&
                           new Date(auction.locked_until).getTime() >
-                            new Date().getTime();
+                            Date.now() - 5000;
 
                         return (
                           <>
@@ -709,10 +708,11 @@ export default function Dashboard() {
                         onClick={() =>
                           handleInstantRefresh(auction.id, auction.status)
                         }
-                        className="action-btn refresh-item"
+                        className="action-btn btn-refresh"
                         title="Instant Refresh"
+                        style={{ color: "#4a7ab5" }}
                       >
-                        <RefreshCw size={14} />
+                        <RefreshCw size={16} />
                       </button>
                       <button
                         onClick={() =>
@@ -1091,7 +1091,7 @@ export default function Dashboard() {
           gap: 30px;
         }
         :global(.glass-card.auction-card) {
-          background: rgba(255, 255, 255, 0.95) !important;
+          background: rgba(255, 255, 255, 0.95);
           backdrop-filter: blur(20px) !important;
           -webkit-backdrop-filter: blur(20px) !important;
           border-radius: 32px !important;
@@ -1185,17 +1185,23 @@ export default function Dashboard() {
         }
 
         :global(.glass-card.auction-card.is-fetching) {
-          border-color: #fef08a !important; /* Pale yellow */
-          animation: blink-bg 2s infinite ease-in-out !important;
+          border-color: #fbbf24 !important; /* Amber border */
+          animation: blink-bg 1.5s infinite ease-in-out !important;
+          box-shadow: 0 0 20px rgba(251, 191, 36, 0.2) !important;
         }
 
-        @keyframes blink-bg {
+        :global(@keyframes blink-bg) {
           0%,
           100% {
-            background: rgba(255, 255, 255, 0.95);
+            background-color: rgba(255, 255, 255, 0.95);
           }
           50% {
-            background: rgba(254, 249, 195, 0.7); /* Light yellow */
+            background-color: rgba(
+              254,
+              243,
+              199,
+              0.85
+            ); /* Visible Amber Tint */
           }
         }
 
@@ -1228,13 +1234,15 @@ export default function Dashboard() {
           color: #f43f5e;
           border-color: #f43f5e;
         }
-        .action-btn.refresh-item {
-          color: var(--accent-blue);
-        }
-        :global(.auction-card.is-fetching .refresh-item) {
-          animation: spin 1s linear infinite;
+        .action-btn.btn-refresh:hover {
           background: rgba(74, 122, 181, 0.1);
           border-color: var(--accent-blue);
+          color: var(--accent-blue);
+        }
+        :global(.auction-card.is-fetching .btn-refresh) {
+          animation: spin 1.5s linear infinite;
+          background: rgba(74, 122, 181, 0.15) !important;
+          border-color: var(--accent-blue) !important;
         }
 
         .item-title {
