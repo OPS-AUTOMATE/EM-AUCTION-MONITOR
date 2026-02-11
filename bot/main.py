@@ -51,7 +51,6 @@ async def run_monitoring_engine(poll_interval: int = 5):
         try:
             now_ts = datetime.now().timestamp()
             
-            # --- STATUS CHANGE MONITOR & AUTO-EXPIRATION ---
             try:
                 now_utc = datetime.now(timezone.utc)
                 all_items = await db.fetch_all_items_minimal()
@@ -94,7 +93,12 @@ async def run_monitoring_engine(poll_interval: int = 5):
                     
                     previous_states[item_id] = current_status
             except Exception as e:
-                logger.error(f"State Tracker Error: {e}")
+                # ConnectionTerminated or Postgrest errors shouldn't crash the engine
+                if "ConnectionTerminated" in str(e) or "SSL" in str(e):
+                    logger.warning(f"Database connection hiccup in State Tracker: {e}. Retrying in 5s...")
+                else:
+                    logger.error(f"State Tracker Error: {e}")
+                await asyncio.sleep(5)
             # -----------------------------
 
             # 1. Periodic Cleanup (Every 1 hour)

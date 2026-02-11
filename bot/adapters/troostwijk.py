@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from playwright.async_api import async_playwright
 from .base_adapter import BaseAuctionAdapter
@@ -55,8 +56,18 @@ class TroostwijkAdapter(BaseAuctionAdapter):
                     item_name = await get_text_safe("/html/body/div[1]/div/main/div[2]/div/div[2]/div/div[1]/h1", use_xpath=True)
 
                 # 2. Location
-                # Selector ends in text() so we take the element
                 location = await get_text_safe("/html/body/div[1]/div/main/div[2]/div/aside/div[1]/div[1]/dl[1]/dd/a", use_xpath=True)
+                
+                city, state = "Unknown", ""
+                if location:
+                    # Clean trailing commas
+                    location = location.strip().rstrip(",")
+                    if "," in location:
+                        parts = location.split(",")
+                        city = parts[0].strip()
+                        state = parts[1].strip()
+                    else:
+                        city = location
 
                 # 3. Time Remaining
                 time_remaining = await get_text_safe("#__next > div > main > div:nth-child(2) > div > div.relative.md\\:mx-0.md\\:pl-4.md\\:pr-4.md\\:pt-4.after\\:content-\\[\\'\\.\\'\\].after\\:absolute.after\\:left-full.after\\:top-0.after\\:h-full.after\\:w-screen.col-start-2.col-end-3.row-start-2.row-end-6.md\\:row-start-1.md\\:row-end-12.md\\:bg-c-background-neutral-subtle-default.lg\\:col-start-2.lg\\:col-end-3.xl\\:col-start-3.xl\\:col-end-4 > div:nth-child(1) > div.flex.items-center.justify-between.border-b.border-solid.border-c-stroke-neutral-default.pb-3 > div > p")
@@ -84,23 +95,55 @@ class TroostwijkAdapter(BaseAuctionAdapter):
 
                 # Status Check: Hardened
                 status = "active"
-                # Only mark as expired if explicitly closed or if no time remaining and no title
-                if not item_name or item_name == "Unknown Item":
-                     content_lower = (await page.content()).lower()
-                     if "closed" in content_lower or "sold" in content_lower:
-                         status = "expired"
+                content_lower = (await page.content()).lower()
+                if "closed" in content_lower or "sold" in content_lower or "ended" in content_lower:
+                    status = "expired"
                 
                 # If we have time remaining, it's definitely NOT expired
                 if time_remaining and any(char.isdigit() for char in time_remaining):
-                    status = "active"
+                    if "closed" not in time_remaining.lower() and "ended" not in time_remaining.lower():
+                        status = "active"
+
+                # 6. Calculate ISO closing time for active auctions
+                closing_time_iso = None
+                if status == "active" and time_remaining:
+                    try:
+                        # --- STRATEGY A: Countdown (1d 3h) ---
+                        days, hours, minutes, seconds = 0, 0, 0, 0
+                        if m := re.search(r'(\d+)\s*d', time_remaining, re.I): days = int(m.group(1))
+                        if m := re.search(r'(\d+)\s*h', time_remaining, re.I): hours = int(m.group(1))
+                        if m := re.search(r'(\d+)\s*m', time_remaining, re.I): minutes = int(m.group(1))
+                        if m := re.search(r'(\d+)\s*s', time_remaining, re.I): seconds = int(m.group(1))
+                        
+                        total_s = (days * 86400) + (hours * 3600) + (minutes * 60) + seconds
+                        if total_s > 0:
+                            closing_time_iso = (datetime.now(timezone.utc) + timedelta(seconds=total_s)).isoformat()
+                        
+                        # --- STRATEGY B: Absolute Date (11 Feb 2026 15:20) ---
+                        if not closing_time_iso:
+                            clean_date = re.sub(r'[^a-zA-Z0-9\s:]', ' ', time_remaining)
+                            m = re.search(r'(\d+)\s+([a-zA-Z]{3})\s+(\d{4})\s+(\d+)\s*[:\s]\s*(\d+)', clean_date)
+                            if m:
+                                day, mon, year, hr, mn = m.groups()
+                                dt_str = f"{day} {mon} {year} {hr}:{mn}"
+                                dt = datetime.strptime(dt_str, "%d %b %Y %H:%M")
+                                # Troostwijk is European (usually CET/CEST)
+                                # Let's assume CET (UTC+1) for now
+                                cet_tz = timezone(timedelta(hours=1))
+                                dt = dt.replace(tzinfo=cet_tz)
+                                closing_time_iso = dt.isoformat()
+                    except: pass
+                elif status == "expired":
+                    closing_time_iso = datetime.now(timezone.utc).isoformat()
 
                 return {
                     "item_name": item_name.strip()[:200] if item_name else "Unknown Item",
                     "current_bid": current_bid,
-                    "city": location.strip() if location else "Unknown",
-                    "state": "",
+                    "city": city,
+                    "state": state,
                     "total_bidders": int(re.sub(r'\D', '', bid_count_text)) if bid_count_text and re.sub(r'\D', '', bid_count_text) else 0,
                     "time_remaining_str": time_remaining.strip() if time_remaining else "",
+                    "closing_time": closing_time_iso,
                     "website_name": "Troostwijk Auctions",
                     "status": status
                 }

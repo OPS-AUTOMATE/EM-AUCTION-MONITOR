@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from playwright.async_api import async_playwright
 from .base_adapter import BaseAuctionAdapter
@@ -29,7 +30,7 @@ class MazreeAdapter(BaseAuctionAdapter):
             
             try:
                 logger.info(f"[Mazree] Fetching: {url}")
-                await page.goto(url, wait_until="networkidle", timeout=60000)
+                await page.goto(url, wait_until="networkidle", timeout=45000)
                 
                 # Wait for main content or title
                 try:
@@ -76,16 +77,49 @@ class MazreeAdapter(BaseAuctionAdapter):
                             current_bid = float(clean_bid)
                     except: pass
 
-                # 3. Location
-                location = await get_text_safe("#description-parent-div > div > div > div > div:nth-child(1) > span:nth-child(2)")
-                if not location:
-                    location = await get_text_safe("/html/body/app-root/div/div/app-user-layout/div/div/div/div/div[2]/div/app-buyer-listing-detail/div/main/section[2]/div/app-common-cards-detail-page/section/div/p-card[1]/div/div[2]/div[1]/div/span[2]", use_xpath=True)
+                # 3. Location (Improved to handle 'Pick From')
+                location = "Unknown"
+                try:
+                    # Try specific labels first
+                    labels = ["Location", "Pick From", "Item Location"]
+                    for label in labels:
+                        loc_el = page.locator(f"span:has-text('{label}') + span").first
+                        if await loc_el.count() > 0:
+                            possible_loc = await loc_el.inner_text()
+                            if possible_loc and "Parts" not in possible_loc and "Working" not in possible_loc:
+                                location = possible_loc
+                                break
+                    
+                    if location == "Unknown":
+                        # Fallback to broad cards
+                        location = await get_text_safe("#description-parent-div > div > div > div > div:nth-child(1) > span:nth-child(2)")
+                    
+                    # Sanity check: If location contains "Parts", it's probably wrong
+                    if location and ("Parts" in location or "Working" in location):
+                        location = "Unknown"
+                except: pass
                 
                 if not location or location == "Unknown":
-                    page_text = (await page.content())
-                    loc_match = re.search(r"([A-Z][a-z]+,\s*[A-Z]{2})", page_text)
+                    # Try to find "City, ST" pattern in the whole page
+                    page_text = (await page.inner_text("body"))
+                    loc_match = re.search(r"\b([A-Z][a-z]+,\s*[A-Z]{2})\b", page_text)
                     if loc_match:
                         location = loc_match.group(1).strip()
+
+                # Clean location
+                city, state = "Unknown", ""
+                if location and location != "Unknown":
+                    # Remove trailing punctuation
+                    location = location.strip().rstrip(",.")
+                    # Remove country if present
+                    location = re.sub(r",?\s*(United States|USA)$", "", location, flags=re.I).strip().rstrip(",")
+                    
+                    if "," in location:
+                        parts = location.split(",")
+                        city = parts[0].strip()
+                        state = parts[1].strip()
+                    else:
+                        city = location
 
                 # 4. Time Remaining (Smart Parse)
                 time_remaining = await get_text_safe("#child-of-buyer-center-section > div.flex.flex-wrap.items-center.justify-between.gap-2.md\\:gap-0.pb-6.border-b.border-surface-200.dark\\:border-surface-600.font-poppins-regular.ng-tns-c700949049-12.ng-star-inserted > span.font-poppins-regular.ng-tns-c700949049-12")
@@ -98,22 +132,17 @@ class MazreeAdapter(BaseAuctionAdapter):
                 status = "active"
                 content_lower = (await page.content()).lower()
                 
-                # Try to find specific "In Progress" or "Ended" badges
-                if "in progress" in content_lower:
-                    status = "active"
-                elif "closed" in content_lower or "sold" in content_lower:
-                    # Only mark as ended if we don't see "In Progress"
+                if "closed" in content_lower or "sold" in content_lower or "ended" in content_lower:
                     status = "expired"
 
                 # If we have any parsed time, it MUST be active
                 if time_remaining and any(char.isdigit() for char in time_remaining):
-                    # Check if it actually says "Ended" in the time string itself
                     if "ended" not in time_remaining.lower():
                         status = "active"
 
                 # 5. Handle "Ends In" format for closing_time calculation
                 closing_time_iso = None
-                if time_remaining:
+                if time_remaining and status == "active":
                     try:
                         # Format: "3 Days : 17 Hours : 51 Minutes : 55 Seconds"
                         days, hours, minutes, seconds = 0, 0, 0, 0
@@ -126,12 +155,16 @@ class MazreeAdapter(BaseAuctionAdapter):
                         if total_s > 0:
                             closing_time_iso = (datetime.now(timezone.utc) + timedelta(seconds=total_s)).isoformat()
                     except: pass
+                
+                # If expired, set closing time to now to stop any residual timers
+                if status == "expired":
+                    closing_time_iso = datetime.now(timezone.utc).isoformat()
 
                 return {
                     "item_name": item_name.strip()[:200] if item_name else "Unknown Item",
                     "current_bid": current_bid,
-                    "city": location.strip() if location else "Unknown",
-                    "state": "",
+                    "city": city,
+                    "state": state,
                     "closing_time": closing_time_iso,
                     "time_remaining_str": time_remaining.strip() if time_remaining else "",
                     "website_name": "Mazree",

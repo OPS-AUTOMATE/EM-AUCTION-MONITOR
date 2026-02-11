@@ -143,7 +143,33 @@ class CenturionAdapter(BaseAuctionAdapter):
                             await page.goto(url, wait_until="domcontentloaded", timeout=60000)
                 except: pass
                 
-                # --- STRATEGY 0: Ground Truth JSON (Fastest & Most Reliable) ---
+                # --- WAIT FOR DYNAMIC CONTENT ---
+                # Centurion spans for price, time, and status often load via JS after the main DOM.
+                await page.wait_for_timeout(3500)
+
+                # --- EXPIRATION CHECK ---
+                try:
+                    # User provided selector for Lot Closed message
+                    expired_selector = "#LotDetailsTimed > div > article > section.auc_show > div.auc_info.right > div.auc_info_bid > div:nth-child(4) > div > div"
+                    expired_elem = page.locator(expired_selector).first
+                    body_content = await page.content()
+                    
+                    if await expired_elem.count() > 0:
+                        txt = await expired_elem.inner_text()
+                        if "lot closed" in txt.lower():
+                            status = "expired"
+                            logger.info("[Centurion] Detected 'Lot Closed' via selector.")
+                    
+                    # Broad fallback for expiration keywords anywhere in the page
+                    if status != "expired":
+                        for indicator in ["lot closed", "sale has ended", "bidding has closed"]:
+                            if indicator in body_content.lower():
+                                status = "expired"
+                                logger.info(f"[Centurion] Detected '{indicator}' via page content.")
+                                break
+                except: pass
+
+                # --- STRATEGY 0: Ground Truth JSON ---
                 try:
                     server_data = await page.evaluate("""() => {
                         const script = document.querySelector("script[data-server='server-data-json']");
@@ -152,136 +178,157 @@ class CenturionAdapter(BaseAuctionAdapter):
                     
                     if server_data and "default" in server_data:
                         d = server_data["default"]
+                        if "currentBid" in d: current_bid = float(d["currentBid"])
+                        elif "askingBid" in d: current_bid = float(d["askingBid"])
                         
-                        # 1. Price
-                        if "currentBid" in d:
-                            current_bid = float(d["currentBid"])
-                        elif "askingBid" in d: # Fallback if no bids yet
-                            current_bid = float(d["askingBid"])
-                        
-                        # 2. Time
+                        # --- JSON LOCATION CHECK ---
+                        if "location" in d and d["location"]:
+                            m = re.search(r'\b([A-Z][A-Za-z\s]{2,20}),\s*([A-Z]{2}|[A-Z][a-z])\b', str(d["location"]))
+                            if m:
+                                c, s = m.group(1).strip(), m.group(2).strip()
+                                valid_states = {"AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "AB", "BC", "MB", "NB", "NL", "NS", "NT", "NU", "ON", "PE", "QC", "SK", "YT"}
+                                blacklist = ["Group", "LLC", "Ltd", "Inc", "Service", "MTIH"]
+                                
+                                if s.upper() in valid_states and c not in blacklist:
+                                    city, state = c, s
+                                    logger.info(f"[Centurion] Location found in JSON: {city}, {state}")
+
                         if "secondsLeft" in d:
                             seconds_left = float(d["secondsLeft"])
-                            if seconds_left > 0:
+                            if seconds_left <= 0:
+                                status = "expired"
+                            elif not closing_time_iso and status != "expired":
                                 now_utc = datetime.now(timezone.utc)
                                 closing_time_iso = (now_utc + timedelta(seconds=seconds_left)).isoformat()
-                            else:
-                                # Negative means closed
-                                status = "expired"
-                                logger.info(f"[Centurion] Lot detected as CLOSED (secondsLeft: {seconds_left})")
-                        
-                        # 3. Lot ID (For Strategy 1)
-                        if "auctionLotId" in d:
-                            lot_id = str(d["auctionLotId"])
-                            logger.info(f"[Centurion] Found internal Lot ID: {lot_id}")
-
-                        logger.info(f"[Centurion] Strategy 0 Success: ${current_bid}")
-
                 except Exception as e:
-                    logger.warning(f"[Centurion] Strategy 0 failed: {e}")
+                    logger.debug(f"[Centurion] JSON Strategy error: {e}")
 
-                # --- EXTRACTION FALLBACKS (Visual/Dynamic) ---
-                # Strategy 0 & 1 rely on JSON. If they fail (common after login), we use visual scraping
-                if status == "expired" or not closing_time_iso or current_bid == 0.0:
-                    try:
-                        # Use inner_text to strip HTML tags for cleaner regex matching
-                        plain_text = await page.inner_text("body")
-                        
-                        # 1. Visual Time Scrape
-                        if not closing_time_iso or status == "expired":
-                            # Pattern A: Relative Countdown (e.g. "Time left: 21h 5m 21s")
-                            time_match = re.search(r'Time\s*left:\s*([\d\s\w]+)', plain_text, re.IGNORECASE)
-                            if time_match:
-                                time_str = time_match.group(1).strip()
-                                logger.info(f"[Centurion DEBUG] Found visual countdown: '{time_str}'")
-                                
-                                days, hours, minutes, seconds = 0, 0, 0, 0
-                                if m := re.search(r'(\d+)\s*d', time_str): days = int(m.group(1))
-                                if m := re.search(r'(\d+)\s*h', time_str): hours = int(m.group(1))
-                                if m := re.search(r'(\d+)\s*m', time_str): minutes = int(m.group(1))
-                                if m := re.search(r'(\d+)\s*s', time_str): seconds = int(m.group(1))
-                                
-                                total_s = (days * 86400) + (hours * 3600) + (minutes * 60) + seconds
-                                if total_s > 0:
-                                    closing_time_iso = (datetime.now(timezone.utc) + timedelta(seconds=total_s)).isoformat()
-                                    status = "active"
-                                    logger.info(f"[Centurion] Visual Countdown Success: {total_s}s")
-                            
-                            # Pattern B: Absolute Date (e.g. "Ends: Feb 10, 2026, 8:02 PM" or "Ends Feb 10 2026")
-                            if not closing_time_iso:
-                                date_match = re.search(r'Ends:?\s*([A-Z][a-z]{2}\s+\d{1,2},?\s+\d{4}(?:,?\s+\d{1,2}:\d{2}\s*[APM]+)?)', plain_text, re.IGNORECASE)
-                                if date_match:
-                                    date_str = date_match.group(1).strip().replace(",", "")
-                                    logger.info(f"[Centurion DEBUG] Found visual date string: '{date_str}'")
-                                    try:
-                                        # Try common formats
-                                        for fmt in ("%b %d %Y %I:%M %p", "%b %d %Y"):
-                                            try:
-                                                dt = datetime.strptime(date_str, fmt)
-                                                # Assume current year if missing, or use parsed year. Centurion usually provides year.
-                                                # If no timezone, assume Eastern (Centurion default) or UTC.
-                                                # For now, let's treat it as local-ish or UTC.
-                                                closing_time_iso = dt.replace(tzinfo=timezone.utc).isoformat()
-                                                logger.info(f"[Centurion] Visual Date Parse Success: {closing_time_iso}")
-                                                break
-                                            except: continue
-                                    except Exception as e:
-                                        logger.warning(f"[Centurion] Date parse error: {e}")
-                        
-                        # 2. Visual Price Detection (e.g. "Enter $5 or more")
-                        if current_bid == 0.0:
-                             price_match = re.search(r'Enter\s*\$([\d,.]+)', plain_text, re.IGNORECASE)
-                             if price_match:
-                                 # This is the starting bid (asking bid)
-                                 current_bid = float(price_match.group(1).replace(",", ""))
-                                 logger.info(f"[Centurion] Visual Price Detection: Starting at ${current_bid}")
-
-                    except Exception as e:
-                        logger.warning(f"[Centurion] Visual Fallback error: {e}")
-
-                # --- TITLE & LOCATION (Always Scrape) ---
+                # 1. Title
                 try:
-                    # 1. Title (Try Breadcrumb first, then Heading)
-                    title_found = False
-                    try:
-                        breadcrumb_lot = await page.locator(".crumb-lotitem").first.inner_text()
-                        if breadcrumb_lot and len(breadcrumb_lot.strip()) > 3: 
-                            item_name = breadcrumb_lot.strip()
-                            title_found = True
-                    except: pass
+                    title_selector = "#LotDetailsTimed > div > article > section.auctitle.auc_dtl_title.auc_mob_dis > div.tle.aucdttle > h1 > span"
+                    title_elem = page.locator(title_selector).first
+                    if await title_elem.count() > 0:
+                        txt = await title_elem.inner_text()
+                        if txt and len(txt.strip()) > 2:
+                            item_name = txt.strip()
+                            logger.info(f"[Centurion] Title extract Success: {item_name}")
+                except: pass
+
+                # 2. Current Bid
+                try:
+                    bid_selector = "#currentBid > span.exratetip.exratetip-current-bid"
+                    bid_xpath = "xpath=/html/body/div[3]/form/div/article/section[3]/div[2]/div[2]/div[1]/div/span[2]"
+                    bid_elem = page.locator(bid_selector).first
+                    if await bid_elem.count() == 0:
+                        bid_elem = page.locator(bid_xpath).first
                     
-                    if not title_found:
-                        try:
-                            h1_title = await page.locator("h1.lot-details-title, h1").first.inner_text()
-                            if h1_title: item_name = h1_title.strip()
-                        except: pass
-                except: pass
-                
-                try:
-                    # 2. Location (City/State Inference from Auction Breadcrumb)
-                    auc_name = await page.locator(".crumb-auctions").first.inner_text()
-                    if auc_name:
-                        # Direct City, State match (e.g. "Chicago, IL" or "Phoenix, AZ")
-                        city_state_match = re.search(r'([A-Z][a-z\s]+),\s*([A-Z]{2})', auc_name)
-                        if city_state_match:
-                            city, state = city_state_match.group(1).strip(), city_state_match.group(2).strip()
-                        else:
-                            # Keyword matching for known locations if no strict pattern
-                            if "Chicago" in auc_name: city, state = "Chicago", "IL"
-                            elif "Charlotte" in auc_name: city, state = "Charlotte", "NC"
-                            elif "Dallas" in auc_name: city, state = "Dallas", "TX"
-                            elif "Phoenix" in auc_name: city, state = "Phoenix", "AZ"
-                            elif "Los Angeles" in auc_name: city, state = "Los Angeles", "CA"
-                            elif "Miami" in auc_name: city, state = "Miami", "FL"
+                    if await bid_elem.count() > 0:
+                        bid_text = await bid_elem.inner_text()
+                        price_match = re.search(r'[\d,.]+', bid_text)
+                        if price_match:
+                            current_bid = float(price_match.group(0).replace(",", ""))
+                            logger.info(f"[Centurion] Bid extract Success: ${current_bid}")
                 except: pass
 
-                # Final Status Safety: If we still don't have a name, something is wrong
+                # 3. Timestamp / Closing Time Calculation
+                try:
+                    time_sel = "span.time-left"
+                    time_xpath = "xpath=/html/body/div[3]/form/div/article/section[3]/div[2]/div[2]/div[1]/span"
+                    time_elem = page.locator(time_sel).first
+                    if await time_elem.count() == 0:
+                        time_elem = page.locator(time_xpath).first
+                    
+                    if await time_elem.count() > 0:
+                        time_text = (await time_elem.inner_text()).lower()
+                        if "time left" in time_text:
+                            # Standardize parsing across all adapters
+                            days, hours, minutes, seconds = 0, 0, 0, 0
+                            if m := re.search(r'(\d+)\s*d', time_text, re.I): days = int(m.group(1))
+                            if m := re.search(r'(\d+)\s*h', time_text, re.I): hours = int(m.group(1))
+                            if m := re.search(r'(\d+)\s*m', time_text, re.I): minutes = int(m.group(1))
+                            if m := re.search(r'(\d+)\s*s', time_text, re.I): seconds = int(m.group(1))
+                            
+                            # Fallback for full words
+                            if not days and (m := re.search(r'(\d+)\s*Days?', time_text, re.I)): days = int(m.group(1))
+                            if not hours and (m := re.search(r'(\d+)\s*Hours?', time_text, re.I)): hours = int(m.group(1))
+                            
+                            total_s = (days * 86400) + (hours * 3600) + (minutes * 60) + seconds
+                            if total_s > 0:
+                                closing_time_iso = (datetime.now(timezone.utc) + timedelta(seconds=total_s)).isoformat()
+                                status = "active"
+                except: pass
+
+                # 4. Bidders (Forced 0 per user)
+                total_bidders = 0
+
+                # --- AGGRESSIVE LOCATION SEARCH ---
+                if city == "Unknown":
+                    try:
+                        valid_states = {"AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "AB", "BC", "MB", "NB", "NL", "NS", "NT", "NU", "ON", "PE", "QC", "SK", "YT"}
+                        loc_pattern = r'\b([A-Z][A-Za-z\s]{2,20}),\s*([A-Z]{2}|[A-Z][a-z])\b'
+                        blacklist = ["Group", "LLC", "Ltd", "Inc", "Service", "MTIH", "Additionally", "Moreover", "However", "Note"]
+
+                        # Priority A: Breadcrumbs
+                        for sel in [".crumb-auctions", ".crumb-lotitem", ".crumb-home", ".breadcrumb", "h1"]:
+                            elems = await page.locator(sel).all()
+                            for elem in elems:
+                                br_text = await elem.inner_text()
+                                parts = re.split(r'[/>|]', br_text)
+                                for p in parts:
+                                    clean_p = p.strip()
+                                    if not clean_p: continue
+                                    
+                                    matches = re.finditer(loc_pattern, clean_p)
+                                    match_found = False
+                                    for match in matches:
+                                        match_found = True
+                                        c, s = match.group(1).strip(), match.group(2).strip()
+                                        if s.upper() in valid_states and c not in blacklist:
+                                            city, state = c, s
+                                            logger.info(f"[Centurion] Location set via Breadcrumbs: {city}, {state}")
+                                            break
+                                    
+                                    # Fallback for common Centurion auction titles that lack City, ST format
+                                    if city == "Unknown" and not match_found:
+                                        if clean_p.startswith("Chicago"): 
+                                            city, state = "Chicago", "IL"
+                                            logger.info("[Centurion] Fallback: Set Chicago, IL from auction title.")
+                                        elif clean_p.startswith("Phoenix"):
+                                            city, state = "Phoenix", "Az"
+                                            logger.info("[Centurion] Fallback: Set Phoenix, Az from auction title.")
+                                        elif clean_p.startswith("Las Vegas"):
+                                            city, state = "Las Vegas", "NV"
+                                            logger.info("[Centurion] Fallback: Set Las Vegas, NV from auction title.")
+
+                                    if city != "Unknown": break
+                                if city != "Unknown": break
+                            if city != "Unknown": break
+
+                        # Priority B: Body Text Fallback
+                        if city == "Unknown":
+                            body_text = await page.inner_text("body")
+                            matches = re.finditer(loc_pattern, body_text[:10000])
+                            for match in matches:
+                                c, s = match.group(1).strip(), match.group(2).strip()
+                                if s.upper() in valid_states and c not in blacklist:
+                                    city, state = c, s
+                                    logger.info(f"[Centurion] Location set via Body Scan: {city}, {state}")
+                                    break
+                    except Exception as e:
+                        logger.error(f"[Centurion] Location scan error: {e}")
+
+                # Final Status Safety & Timestamp Override
                 if item_name == "Unknown Item" or not item_name:
-                    content = await page.content()
-                    if "Page Not Found" in content or "Listing Removed" in content:
+                    content_lower = (await page.content()).lower()
+                    if "page not found" in content_lower or "listing removed" in content_lower:
                         status = "expired"
 
-                return {
+                if status == "expired":
+                    closing_time_iso = datetime.now(timezone.utc).isoformat()
+                    logger.info(f"[Centurion] Item expired. Set closing_time to {closing_time_iso}")
+
+                # Prepare Result
+                result = {
                     "item_name": item_name.strip(),
                     "current_bid": current_bid,
                     "city": city,
@@ -291,6 +338,14 @@ class CenturionAdapter(BaseAuctionAdapter):
                     "website_name": "Centurion Service",
                     "status": status
                 }
+                
+                logger.info(f"[Centurion] FINAL DATA: Title='{result['item_name']}', Bid={result['current_bid']}, Location='{result['city']}, {result['state']}', Status='{result['status']}', Closing={result['closing_time']}")
+
+                return result
+
+
+
+
 
             except Exception as e:
                 logger.error(f"[Centurion] Critical Error: {e}")

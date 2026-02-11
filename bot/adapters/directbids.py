@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from playwright.async_api import async_playwright
 from .base_adapter import BaseAuctionAdapter
@@ -58,6 +59,17 @@ class DirectBidsAdapter(BaseAuctionAdapter):
                 if not location:
                     location = await get_text_safe("/html/body/div[2]/main/div[1]/div[2]/div/div[2]/div[2]/div[1]/div/div[1]/div[1]", use_xpath=True)
 
+                city, state = "Unknown", ""
+                if location:
+                    # Clean trailing commas
+                    location = location.strip().rstrip(",")
+                    if "," in location:
+                        parts = location.split(",")
+                        city = parts[0].strip()
+                        state = parts[1].strip()
+                    else:
+                        city = location
+
                 # 3. Time Left & Ends On
                 time_left = await get_text_safe("/html/body/div[2]/main/div[1]/div[2]/div/div[3]/div[1]", use_xpath=True)
                 ends_on = await get_text_safe("/html/body/div[2]/main/div[1]/div[2]/div/div[3]/div[2]/em", use_xpath=True)
@@ -86,15 +98,34 @@ class DirectBidsAdapter(BaseAuctionAdapter):
                 
                 # If we have time left or an end date, it's active
                 if (time_left and any(char.isdigit() for char in time_left)) or (ends_on and len(ends_on) > 5):
-                    status = "active"
+                    if "closed" not in time_left.lower() and "sold" not in time_left.lower():
+                        status = "active"
+
+                # 6. Calculate ISO closing time for active auctions
+                closing_time_iso = None
+                if status == "active" and time_left:
+                    try:
+                        days, hours, minutes, seconds = 0, 0, 0, 0
+                        if m := re.search(r'(\d+)\s*Days?', time_left, re.I): days = int(m.group(1))
+                        if m := re.search(r'(\d+)\s*Hours?', time_left, re.I): hours = int(m.group(1))
+                        if m := re.search(r'(\d+)\s*Minutes?', time_left, re.I): minutes = int(m.group(1))
+                        if m := re.search(r'(\d+)\s*Seconds?', time_left, re.I): seconds = int(m.group(1))
+                        
+                        total_s = (days * 86400) + (hours * 3600) + (minutes * 60) + seconds
+                        if total_s > 0:
+                            closing_time_iso = (datetime.now(timezone.utc) + timedelta(seconds=total_s)).isoformat()
+                    except: pass
+                elif status == "expired":
+                    closing_time_iso = datetime.now(timezone.utc).isoformat()
 
                 return {
                     "item_name": item_name.strip()[:200] if item_name else "Unknown Item",
                     "current_bid": current_bid,
-                    "city": location.strip() if location else "Unknown",
-                    "state": "",
+                    "city": city,
+                    "state": state,
                     "total_bidders": int(re.sub(r'\D', '', bid_count_text)) if bid_count_text and re.sub(r'\D', '', bid_count_text) else 0,
                     "time_remaining_str": time_left.strip() if time_left else "",
+                    "closing_time": closing_time_iso,
                     "website_name": "Direct Bids",
                     "status": status
                 }

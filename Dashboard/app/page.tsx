@@ -67,7 +67,8 @@ export default function Dashboard() {
   const buzzedItems = useRef<Set<string>>(new Set());
   const lastBuzzerTime = useRef<number>(0);
   const router = useRouter();
-  const supabase = createClient();
+  // CRITICAL: Initialize supabase once, do NOT create on every render
+  const [supabase] = useState(() => createClient());
 
   const fetchAuctions = useCallback(
     async (userId: string) => {
@@ -201,8 +202,17 @@ export default function Dashboard() {
   useEffect(() => {
     // Tick is used to trigger re-renders for the live countdown
     const timer = setInterval(() => setTick((prev) => prev + 1), 1000);
-    return () => clearInterval(timer);
-  }, []);
+
+    // Safety Backup: Refresh full list every 60 seconds just in case Realtime hangs
+    const safetyTimer = setInterval(() => {
+      if (user) fetchAuctions(user.id);
+    }, 60000);
+
+    return () => {
+      clearInterval(timer);
+      clearInterval(safetyTimer);
+    };
+  }, [user, fetchAuctions]);
 
   // Monitor for critical items and buzz
   useEffect(() => {
@@ -239,8 +249,23 @@ export default function Dashboard() {
   const getRemainingTime = (
     closingTime: string | undefined,
     staticStr: string | undefined,
+    status: string | undefined,
   ) => {
-    if (!closingTime) return staticStr || "Syncing...";
+    // Priority 1: If backend says expired, it's ended.
+    if (status === "expired") return "Ended";
+
+    if (!closingTime) {
+      // If we only have a static string, clean it up
+      if (!staticStr) return "Syncing...";
+      // Standardize common formats like "3 Days : 17 Hours" to "3d 17h"
+      return staticStr
+        .replace(/Days?/gi, "d")
+        .replace(/Hours?/gi, "h")
+        .replace(/Minutes?/gi, "m")
+        .replace(/Seconds?/gi, "s")
+        .replace(/\s*:\s*/g, " ")
+        .trim();
+    }
 
     const end = new Date(closingTime).getTime();
     const now = new Date().getTime();
@@ -312,28 +337,32 @@ export default function Dashboard() {
 
     setAddingItem(true);
 
-    const { error } = await supabase.from("auction_items").insert([
-      {
-        url: newUrl,
-        user_id: user.id,
-        site_key: getSiteKey(newUrl),
-        status: "active",
-        item_name: "Syncing...",
-        website_name: "Pending Sync",
-        current_bid: 0,
-        premium_percentage: getInitialPremium(newUrl),
-        total_bidders: 0,
-        closing_time: null, // Let the engine fetch the real time
-        time_remaining_str: "Starting Sync...",
-      },
-    ]);
+    const { data, error } = await supabase
+      .from("auction_items")
+      .insert([
+        {
+          url: newUrl,
+          user_id: user.id,
+          site_key: getSiteKey(newUrl),
+          status: "active",
+          item_name: "Syncing...",
+          website_name: "Pending Sync",
+          current_bid: 0,
+          premium_percentage: getInitialPremium(newUrl),
+          total_bidders: 0,
+          closing_time: null,
+          time_remaining_str: "Starting Sync...",
+        },
+      ])
+      .select()
+      .single();
 
-    if (!error) {
+    if (!error && data) {
+      setAuctions((prev) => [data as Auction, ...prev]);
       setNewUrl("");
-      // Switch to All Auctions view so the user can see the "Syncing..." card immediately
       setActiveSource("All Auctions");
       setActiveTab("all");
-    } else {
+    } else if (error) {
       console.error("Add item error:", error);
       alert("Failed to add URL. Please try again.");
     }
@@ -664,9 +693,20 @@ export default function Dashboard() {
                       <div className="meta-pill">
                         <MapPin size={12} />
                         <span>
-                          {auction.city
-                            ? `${auction.city}, ${auction.state}`
-                            : "Locating..."}
+                          {(() => {
+                            const city =
+                              auction.city && auction.city !== "Unknown"
+                                ? auction.city
+                                : null;
+                            const state =
+                              auction.state && auction.state !== "Unknown"
+                                ? auction.state
+                                : null;
+                            if (city && state) return `${city}, ${state}`;
+                            if (city) return city;
+                            if (state) return state;
+                            return "Unknown";
+                          })()}
                         </span>
                       </div>
                       <div className="meta-pill">
@@ -709,6 +749,7 @@ export default function Dashboard() {
                           {getRemainingTime(
                             auction.closing_time,
                             auction.time_remaining_str,
+                            auction.status,
                           )}
                         </span>
                       </div>
@@ -1121,9 +1162,13 @@ export default function Dashboard() {
           font-size: 11px;
           color: var(--text-secondary);
           background: rgba(0, 0, 0, 0.03);
-          padding: 4px 10px;
+          padding: 4px 12px;
           border-radius: 100px;
           font-weight: 600;
+          max-width: 180px;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
         }
 
         .stats-row {

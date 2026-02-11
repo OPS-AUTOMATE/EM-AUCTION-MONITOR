@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from playwright.async_api import async_playwright
 from .base_adapter import BaseAuctionAdapter
@@ -79,6 +80,17 @@ class GCSurplusAdapter(BaseAuctionAdapter):
                 if not location:
                     location = await get_text_safe("/html/body/div[3]/div/main/div[2]/form/div/div/div[6]/div[2]/section/div/div[1]/section/div/dl/dd[6]", use_xpath=True)
 
+                city, state = "Unknown", ""
+                if location:
+                    # Clean trailing commas
+                    location = location.strip().rstrip(",")
+                    if "," in location:
+                        parts = location.split(",")
+                        city = parts[0].strip()
+                        state = parts[1].strip()
+                    else:
+                        city = location
+
                 # 5. Closing Date
                 closing_date = await get_text_safe("#closingDateId")
                 if not closing_date:
@@ -86,19 +98,62 @@ class GCSurplusAdapter(BaseAuctionAdapter):
 
                 # Status Check: Hardened
                 status = "active"
-                if not item_name or item_name == "Unknown Item":
-                     content_lower = (await page.content()).lower()
-                     if "closed" in content_lower or "fermé" in content_lower:
-                         status = "expired"
+                content_lower = (await page.content()).lower()
+                if "closed" in content_lower or "fermé" in content_lower:
+                    status = "expired"
                 
                 if time_remaining and any(char.isdigit() for char in time_remaining):
-                    status = "active"
+                    if "closed" not in time_remaining.lower() and "fermé" not in time_remaining.lower():
+                        status = "active"
+
+                # 6. Calculate ISO closing time for active auctions
+                closing_time_iso = None
+                if status == "active" and time_remaining:
+                    try:
+                        days, hours, minutes, seconds = 0, 0, 0, 0
+                        # Try to handle formats like "3 Days 5 Hours" or "3 Jours 5 Heures"
+                        if m := re.search(r'(\d+)\s*(Days?|Jours?)', time_remaining, re.I): days = int(m.group(1))
+                        if m := re.search(r'(\d+)\s*(Hours?|Heures?)', time_remaining, re.I): hours = int(m.group(1))
+                        if m := re.search(r'(\d+)\s*(Minutes?|Minutes?)', time_remaining, re.I): minutes = int(m.group(1))
+                        if m := re.search(r'(\d+)\s*(Seconds?|Secondes?)', time_remaining, re.I): seconds = int(m.group(1))
+                        
+                        total_s = (days * 86400) + (hours * 3600) + (minutes * 60) + seconds
+                        if total_s > 0:
+                            closing_time_iso = (datetime.now(timezone.utc) + timedelta(seconds=total_s)).isoformat()
+                        
+                        # Fallback: Parse absolute closing_date (e.g., February 11, 2026, 3:20 p.m. EST)
+                        if not closing_time_iso and closing_date:
+                            try:
+                                # Clean common noise
+                                clean_dt = re.sub(r'\s+', ' ', closing_date).strip()
+                                # Simple format match (Month Day, Year, Time)
+                                # Handles: "February 11, 2026, 3:20 p.m."
+                                m = re.search(r'([a-zA-Z]+)\s+(\d+),\s+(\d{4}),\s+(\d+):(\d+)', clean_dt)
+                                if m:
+                                    mon_name, day, year, hr, mn = m.groups()
+                                    # Month mapping
+                                    mon_map = {"january":1,"february":2,"march":3,"april":4,"may":5,"june":6,"july":7,"august":8,"september":9,"october":10,"november":11,"december":12}
+                                    mon = mon_map.get(mon_name.lower(), 1)
+                                    
+                                    # Check for PM
+                                    is_pm = "p.m." in clean_dt.lower() or "pm" in clean_dt.lower()
+                                    hr_24 = int(hr)
+                                    if is_pm and hr_24 < 12: hr_24 += 12
+                                    if not is_pm and hr_24 == 12: hr_24 = 0
+                                    
+                                    dt = datetime(int(year), mon, int(day), hr_24, int(mn), tzinfo=timezone.utc)
+                                    closing_time_iso = dt.isoformat()
+                            except: pass
+                    except: pass
+                elif status == "expired":
+                    closing_time_iso = datetime.now(timezone.utc).isoformat()
 
                 return {
                     "item_name": item_name.strip()[:200] if item_name else "Unknown Item",
                     "current_bid": current_bid,
-                    "city": location.strip() if location else "Unknown",
-                    "state": "",
+                    "city": city,
+                    "state": state,
+                    "closing_time": closing_time_iso,
                     "time_remaining_str": time_remaining.strip() if time_remaining else "",
                     "website_name": "GC Surplus",
                     "status": status
