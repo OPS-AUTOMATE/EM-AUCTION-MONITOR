@@ -1,5 +1,6 @@
 import hashlib
 import logging
+from typing import List, Optional, Dict
 
 logger = logging.getLogger(__name__)
 
