@@ -42,23 +42,24 @@ class GsaAdapter(BaseAuctionAdapter):
         
         
         proxies = None
-        proxy_conf = self.get_proxy_config()
-        if proxy_conf:
-            p_server = proxy_conf.get("server")
-            p_user = proxy_conf.get("username")
-            p_pass = proxy_conf.get("password")
-            
-            if p_server:
-                # Construct proxy URL for httpx
-                if p_user and p_pass:
-                     # Remove 'http://' prefix if present to avoid duplication if user added it
-                     clean_server = p_server.replace("http://", "").replace("https://", "")
-                     proxy_url = f"http://{p_user}:{p_pass}@{clean_server}"
-                else:
-                     proxy_url = p_server if p_server.startswith("http") else f"http://{p_server}"
-                
-                proxies = {"http://": proxy_url, "https://": proxy_url}
-                logger.info(f"[GSA-API] Using Proxy: {p_server}")
+        # DISABLED Proxy for GSA as per user request to avoid ERR_TUNNEL_CONNECTION_FAILED
+        # proxy_conf = self.get_proxy_config()
+        # if proxy_conf:
+        #     p_server = proxy_conf.get("server")
+        #     p_user = proxy_conf.get("username")
+        #     p_pass = proxy_conf.get("password")
+        #     
+        #     if p_server:
+        #         # Construct proxy URL for httpx
+        #         if p_user and p_pass:
+        #              # Remove 'http://' prefix if present to avoid duplication if user added it
+        #              clean_server = p_server.replace("http://", "").replace("https://", "")
+        #              proxy_url = f"http://{p_user}:{p_pass}@{clean_server}"
+        #         else:
+        #              proxy_url = p_server if p_server.startswith("http") else f"http://{p_server}"
+        #         
+        #         proxies = {"http://": proxy_url, "https://": proxy_url}
+        #         logger.info(f"[GSA-API] Using Proxy: {p_server}")
 
         try:
             async with httpx.AsyncClient(timeout=15.0, verify=False, proxies=proxies) as client:
@@ -104,11 +105,11 @@ class GsaAdapter(BaseAuctionAdapter):
             # Prepare Launch options (NO PROXY for GSA as requested)
             launch_opts = {"headless": True}
             
-            # Enable Proxy rotation for GSA too, since server IP is blocked
-            proxy_conf = self.get_proxy_config()
-            if proxy_conf:
-                launch_opts["proxy"] = proxy_conf
-                logger.info(f"[GSA-Browser] Using Proxy: {proxy_conf['server']}")
+            # DISABLED Proxy for GSA as per user request
+            # proxy_conf = self.get_proxy_config()
+            # if proxy_conf:
+            #     launch_opts["proxy"] = proxy_conf
+            #     logger.info(f"[GSA-Browser] Using Proxy: {proxy_conf['server']}")
 
             browser = await p.chromium.launch(**launch_opts)
             context = await browser.new_context(
