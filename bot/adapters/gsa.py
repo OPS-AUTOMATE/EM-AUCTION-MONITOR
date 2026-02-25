@@ -5,10 +5,7 @@ from datetime import datetime
 import pytz
 from typing import Optional, Dict, Any
 from playwright.async_api import async_playwright
-try:
-    from playwright_stealth import stealth_async
-except ImportError:
-    from playwright_stealth import stealth as stealth_async
+import playwright_stealth
 from .base_adapter import BaseAuctionAdapter
 
 logger = logging.getLogger(__name__)
@@ -134,10 +131,20 @@ class GsaAdapter(BaseAuctionAdapter):
             )
             page = await context.new_page()
             
-            # Apply anti-detection stealth (handle both sync and async versions of the library)
-            stealth_task = stealth_async(page)
-            if asyncio.iscoroutine(stealth_task):
-                await stealth_task
+            # Apply anti-detection stealth with robust version compatibility
+            try:
+                if hasattr(playwright_stealth, "stealth_async"):
+                    await playwright_stealth.stealth_async(page)
+                elif hasattr(playwright_stealth, "stealth") and not hasattr(playwright_stealth.stealth, "__path__"):
+                    # 'stealth' is likely the function, not the module
+                    res = playwright_stealth.stealth(page)
+                    if asyncio.iscoroutine(res): await res
+                elif hasattr(playwright_stealth, "Stealth"):
+                    await playwright_stealth.Stealth().apply_stealth_async(page)
+                else:
+                    logger.warning("[GSA-Browser] No known stealth method found in playwright_stealth package.")
+            except Exception as se:
+                logger.warning(f"[GSA-Browser] Stealth application failed: {se}")
             
             # OPTIMIZATION: Block heavy resources
             await page.route("**/*", lambda route: route.abort() 
