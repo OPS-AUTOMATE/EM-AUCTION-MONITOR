@@ -8,7 +8,7 @@ from typing import Optional, Dict, Any, List
 from playwright.async_api import async_playwright
 import playwright_stealth
 from .base_adapter import BaseAuctionAdapter
-from ..utils.proxy_manager import ProxyManager
+from utils.proxy_manager import ProxyManager
 import urllib.parse
 
 logger = logging.getLogger(__name__)
