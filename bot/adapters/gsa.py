@@ -62,7 +62,8 @@ class GsaAdapter(BaseAuctionAdapter):
         #         logger.info(f"[GSA-API] Using Proxy: {p_server}")
 
         try:
-            async with httpx.AsyncClient(timeout=15.0, verify=False, proxies=proxies) as client:
+            # Removed proxies argument to hit GSA directly and avoid AsyncClient init error
+            async with httpx.AsyncClient(timeout=15.0, verify=False) as client:
                 # Add headers to mimic a browser to avoid 403
                 headers = {
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
@@ -77,6 +78,12 @@ class GsaAdapter(BaseAuctionAdapter):
                         data = response.json()
                         logger.info(f"[GSA-API] Data Keys: {list(data.keys())}")
                         item_name = data.get("itemName") or data.get("lotName") or "GSA Item"
+                        
+                        # Sanity check for "403" in name (GSA sometimes puts error in JSON fields if partially blocked)
+                        if "403" in str(item_name):
+                            logger.warning(f"[GSA-API] Blocked name detected: {item_name}")
+                            return None
+
                         current_bid = float(str(data.get("currentBid", 0)).replace(",", ""))
                         total_bidders = int(data.get("bidderCount", 0))
                         closing_time_iso = data.get("closingTime") or data.get("auctionEndTime")
@@ -93,8 +100,10 @@ class GsaAdapter(BaseAuctionAdapter):
                         }
                     except Exception as e:
                         logger.error(f"[GSA-API] JSON Parse Error: {e}")
-                        logger.debug(f"[GSA-API] Response Text: {response.text[:500]}")
                         return None
+                elif response.status_code == 403:
+                    logger.warning("[GSA-API] 403 Forbidden - Falling back to browser.")
+                    return None
         except Exception as e:
              logger.error(f"[GSA-API] Request Failed: {e}")
              return None
@@ -138,6 +147,12 @@ class GsaAdapter(BaseAuctionAdapter):
                 full_text = await main_block.inner_text() if await main_block.count() > 0 else await page.content()
 
                 # --- 2. Extract Basic Data via Patterns ---
+                
+                # Check for 403 or Forbidden in the text - indicates block
+                if "403" in full_text or "forbidden" in full_text.lower() or "access denied" in full_text.lower():
+                    logger.warning(f"[GSA-Browser] Detected blocking/403 page content for {url}")
+                    return None
+
                 item_name = "Unknown GSA Item"
                 name_match = re.search(r"Item Name\s*:\s*(.*?)\s*Sale Lot Number", full_text, re.DOTALL | re.I)
                 if name_match: item_name = name_match.group(1).strip()
@@ -146,6 +161,10 @@ class GsaAdapter(BaseAuctionAdapter):
                     if h1_count > 0:
                         h1 = await page.locator("h1").first.inner_text()
                         item_name = h1.strip()
+                
+                if "403" in item_name or "forbidden" in item_name.lower():
+                    logger.warning(f"[GSA-Browser] Item name indicates block: {item_name}")
+                    return None
 
                 current_bid = 0.0
                 price_match = re.search(r"Current Bid:\s*\$?\s*([\d,]+\.?\d*)", full_text, re.I)
