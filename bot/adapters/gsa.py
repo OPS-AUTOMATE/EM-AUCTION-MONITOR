@@ -43,7 +43,7 @@ class GsaAdapter(BaseAuctionAdapter):
         
         
         proxies = None
-        # RE-ENABLED Proxy for GSA with fixed syntax
+        # RE-ENABLED Proxy for GSA with robust credential encoding
         proxy_conf = self.get_proxy_config()
         if proxy_conf:
             p_server = proxy_conf.get("server")
@@ -51,28 +51,31 @@ class GsaAdapter(BaseAuctionAdapter):
             p_pass = proxy_conf.get("password")
             
             if p_server:
+                import urllib.parse
+                clean_host = p_server.replace("http://", "").replace("https://", "")
                 if p_user and p_pass:
-                    # Robust proxy URL construction for httpx
-                    clean_server = p_server.replace("http://", "").replace("https://", "")
-                    proxies = f"http://{p_user}:{p_pass}@{clean_server}"
+                    # Escape special characters in password (like '+')
+                    safe_user = urllib.parse.quote(p_user)
+                    safe_pass = urllib.parse.quote(p_pass)
+                    proxies = f"http://{safe_user}:{safe_pass}@{clean_host}"
                 else:
-                    proxies = p_server if p_server.startswith("http") else f"http://{p_server}"
+                    proxies = f"http://{clean_host}"
                 
                 logger.info(f"[GSA-API] Using Proxy: {p_server}")
 
         try:
-            # Fixed argument to hit GSA via proxy correctly
-            async with httpx.AsyncClient(timeout=15.0, verify=False, proxy=proxies) as client:
-                # Add modern headers to mimic a real browser session
+            # Enhanced headers to mimic a premium browser session
+            async with httpx.AsyncClient(timeout=20.0, verify=False, proxy=proxies) as client:
                 headers = {
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
                     "Accept-Language": "en-US,en;q=0.9",
-                    "Referer": "https://gsaauctions.gov/",
+                    "Referer": "https://gsaauctions.gov/auctions/",
                     "DNT": "1",
                     "Sec-Fetch-Dest": "document",
                     "Sec-Fetch-Mode": "navigate",
                     "Sec-Fetch-Site": "same-origin",
+                    "Sec-Fetch-User": "?1",
                     "Upgrade-Insecure-Requests": "1"
                 }
                 response = await client.get(api_url, headers=headers)
@@ -135,24 +138,23 @@ class GsaAdapter(BaseAuctionAdapter):
             try:
                 if hasattr(playwright_stealth, "stealth_async"):
                     await playwright_stealth.stealth_async(page)
-                elif hasattr(playwright_stealth, "stealth") and not hasattr(playwright_stealth.stealth, "__path__"):
-                    # 'stealth' is likely the function, not the module
-                    res = playwright_stealth.stealth(page)
-                    if asyncio.iscoroutine(res): await res
                 elif hasattr(playwright_stealth, "Stealth"):
                     await playwright_stealth.Stealth().apply_stealth_async(page)
+                elif hasattr(playwright_stealth, "stealth") and callable(playwright_stealth.stealth):
+                    res = playwright_stealth.stealth(page)
+                    if asyncio.iscoroutine(res): await res
                 else:
                     logger.warning("[GSA-Browser] No known stealth method found in playwright_stealth package.")
             except Exception as se:
                 logger.warning(f"[GSA-Browser] Stealth application failed: {se}")
             
-            # OPTIMIZATION: Block heavy resources
+            # OPTIMIZATION: Block heavy resources (KEEP STYLESHEETS for better stealth)
             await page.route("**/*", lambda route: route.abort() 
-                if route.request.resource_type in ["image", "media", "font", "stylesheet"] 
+                if route.request.resource_type in ["image", "media", "font"] 
                 else route.continue_())
             try:
                 logger.info(f"[GSA-Browser] Deep Scrape: {url}")
-                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                await page.goto(url, wait_until="domcontentloaded", timeout=45000)
                 
                 # Wait for GSA specific detail container
                 try:
