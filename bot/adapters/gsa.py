@@ -5,6 +5,7 @@ from datetime import datetime
 import pytz
 from typing import Optional, Dict, Any
 from playwright.async_api import async_playwright
+from playwright_stealth import stealth_async
 from .base_adapter import BaseAuctionAdapter
 
 logger = logging.getLogger(__name__)
@@ -42,33 +43,37 @@ class GsaAdapter(BaseAuctionAdapter):
         
         
         proxies = None
-        # DISABLED Proxy for GSA as per user request to avoid ERR_TUNNEL_CONNECTION_FAILED
-        # proxy_conf = self.get_proxy_config()
-        # if proxy_conf:
-        #     p_server = proxy_conf.get("server")
-        #     p_user = proxy_conf.get("username")
-        #     p_pass = proxy_conf.get("password")
-        #     
-        #     if p_server:
-        #         # Construct proxy URL for httpx
-        #         if p_user and p_pass:
-        #              # Remove 'http://' prefix if present to avoid duplication if user added it
-        #              clean_server = p_server.replace("http://", "").replace("https://", "")
-        #              proxy_url = f"http://{p_user}:{p_pass}@{clean_server}"
-        #         else:
-        #              proxy_url = p_server if p_server.startswith("http") else f"http://{p_server}"
-        #         
-        #         proxies = {"http://": proxy_url, "https://": proxy_url}
-        #         logger.info(f"[GSA-API] Using Proxy: {p_server}")
+        # RE-ENABLED Proxy for GSA with fixed syntax
+        proxy_conf = self.get_proxy_config()
+        if proxy_conf:
+            p_server = proxy_conf.get("server")
+            p_user = proxy_conf.get("username")
+            p_pass = proxy_conf.get("password")
+            
+            if p_server:
+                if p_user and p_pass:
+                    # Robust proxy URL construction for httpx
+                    clean_server = p_server.replace("http://", "").replace("https://", "")
+                    proxies = f"http://{p_user}:{p_pass}@{clean_server}"
+                else:
+                    proxies = p_server if p_server.startswith("http") else f"http://{p_server}"
+                
+                logger.info(f"[GSA-API] Using Proxy: {p_server}")
 
         try:
-            # Removed proxies argument to hit GSA directly and avoid AsyncClient init error
-            async with httpx.AsyncClient(timeout=15.0, verify=False) as client:
-                # Add headers to mimic a browser to avoid 403
+            # Fixed argument to hit GSA via proxy correctly
+            async with httpx.AsyncClient(timeout=15.0, verify=False, proxy=proxies) as client:
+                # Add modern headers to mimic a real browser session
                 headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-                    "Accept": "application/json, text/plain, */*",
-                    "Referer": "https://gsaauctions.gov/"
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Referer": "https://gsaauctions.gov/",
+                    "DNT": "1",
+                    "Sec-Fetch-Dest": "document",
+                    "Sec-Fetch-Mode": "navigate",
+                    "Sec-Fetch-Site": "same-origin",
+                    "Upgrade-Insecure-Requests": "1"
                 }
                 response = await client.get(api_url, headers=headers)
                 logger.info(f"[GSA-API] Status: {response.status_code}")
@@ -111,21 +116,23 @@ class GsaAdapter(BaseAuctionAdapter):
 
     async def _fetch_via_browser(self, url: str) -> Optional[Dict[str, Any]]:
         async with async_playwright() as p:
-            # Prepare Launch options (NO PROXY for GSA as requested)
+            # RE-ENABLED Proxy for GSA
             launch_opts = {"headless": True}
-            
-            # DISABLED Proxy for GSA as per user request
-            # proxy_conf = self.get_proxy_config()
-            # if proxy_conf:
-            #     launch_opts["proxy"] = proxy_conf
-            #     logger.info(f"[GSA-Browser] Using Proxy: {proxy_conf['server']}")
+            proxy_conf = self.get_proxy_config()
+            if proxy_conf:
+                launch_opts["proxy"] = proxy_conf
+                logger.info(f"[GSA-Browser] Using Proxy: {proxy_conf['server']}")
 
             browser = await p.chromium.launch(**launch_opts)
             context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-                viewport={'width': 1920, 'height': 1080}
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                viewport={'width': 1920, 'height': 1080},
+                device_scale_factor=1,
             )
             page = await context.new_page()
+            
+            # Apply anti-detection stealth
+            await stealth_async(page)
             
             # OPTIMIZATION: Block heavy resources
             await page.route("**/*", lambda route: route.abort() 
