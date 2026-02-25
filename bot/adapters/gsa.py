@@ -4,6 +4,7 @@ import re
 from datetime import datetime
 import pytz
 from typing import Optional, Dict, Any
+from playwright.async_api import async_playwright
 try:
     from playwright_stealth import stealth_async
 except ImportError:
