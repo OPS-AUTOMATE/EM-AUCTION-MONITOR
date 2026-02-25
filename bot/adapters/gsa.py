@@ -19,6 +19,34 @@ class GsaAdapter(BaseAuctionAdapter):
     Combines API speed with browser precision.
     """
 
+    def _get_stealth_profile(self) -> Dict[str, Any]:
+        """Returns a randomized browser/device profile."""
+        is_mobile = random.choice([True, False])
+        if is_mobile:
+            # High-end Mobile (iPhone 15 Pro style)
+            return {
+                "is_mobile": True,
+                "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
+                "viewport": {"width": 393, "height": 852},
+                "headers": {
+                    "Sec-CH-UA-Mobile": "?1",
+                    "Sec-CH-UA-Platform": '"iOS"',
+                    "Sec-CH-UA": '"Safari";v="17", "Not:A-Brand";v="8"',
+                }
+            }
+        else:
+            # Premium Desktop (Chrome 123)
+            return {
+                "is_mobile": False,
+                "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+                "viewport": {"width": random.randint(1440, 1920), "height": random.randint(900, 1080)},
+                "headers": {
+                    "Sec-CH-UA-Mobile": "?0",
+                    "Sec-CH-UA-Platform": '"Windows"',
+                    "Sec-CH-UA": '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
+                }
+            }
+
     async def fetch(self, url: str, preferred_method: int = 0) -> Optional[Dict[str, Any]]:
         # 1. API Mode (SUID or Preview ID)
         suid_match = re.search(r"[?&]suid=([A-Z0-9]+)", url, re.I)
@@ -44,12 +72,12 @@ class GsaAdapter(BaseAuctionAdapter):
         api_url = f"https://gsaauctions.gov/gsaauctions/aucindx/?suid={suid}"
         logger.info(f"[GSA-API] Fetching: {api_url}")
 
-        async def _do_api_request(p_url: str, p_config: Optional[str]) -> Optional[httpx.Response]:
+        async def _do_api_request(p_url: str, p_config: Optional[str], profile: Dict[str, Any]) -> Optional[httpx.Response]:
             try:
                 # Enhanced headers to mimic a premium browser session
                 async with httpx.AsyncClient(timeout=20.0, verify=False, proxy=p_config) as client:
                     headers = {
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+                        "User-Agent": profile["ua"],
                         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
                         "Accept-Language": "en-US,en;q=0.9",
                         "Referer": "https://gsaauctions.gov/auctions/",
@@ -59,9 +87,7 @@ class GsaAdapter(BaseAuctionAdapter):
                         "Sec-Fetch-Site": "same-origin",
                         "Sec-Fetch-User": "?1",
                         "Upgrade-Insecure-Requests": "1",
-                        "Sec-CH-UA": '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
-                        "Sec-CH-UA-Mobile": "?0",
-                        "Sec-CH-UA-Platform": '"Windows"'
+                        **profile["headers"]
                     }
                     return await client.get(p_url, headers=headers)
             except Exception as e:
@@ -100,8 +126,11 @@ class GsaAdapter(BaseAuctionAdapter):
                 else:
                     p_url = f"http://{p_server}"
             
-            logger.info(f"[GSA-API] Attempt {i+1}/{len(proxies_to_try)} using: {config.get('server') if config else 'DIRECT'}")
-            response = await _do_api_request(api_url, p_url)
+            # Select a random profile for each attempt
+            profile = self._get_stealth_profile()
+            logger.info(f"[GSA-API] Attempt {i+1}/{len(proxies_to_try)} using: {config.get('server') if config else 'DIRECT'} | Profile: {'Mobile' if profile['is_mobile'] else 'Desktop'}")
+            
+            response = await _do_api_request(api_url, p_url, profile)
             if response and response.status_code == 200:
                 break
             logger.warning(f"[GSA-API] Attempt {i+1} failed ({getattr(response, 'status_code', 'ERR')}).")
@@ -109,7 +138,7 @@ class GsaAdapter(BaseAuctionAdapter):
         # FALLBACK: If all proxies failed, try Direct
         if (not response or response.status_code >= 400) and any(proxies_to_try):
             logger.warning("[GSA-API] All proxies failed/blocked. Retrying DIRECT...")
-            response = await _do_api_request(api_url, None)
+            response = await _do_api_request(api_url, None, self._get_stealth_profile())
 
         try:
             if response and response.status_code == 200:
@@ -201,8 +230,9 @@ class GsaAdapter(BaseAuctionAdapter):
                 random.shuffle(other_proxies)
                 for p_str in other_proxies[:2]:
                     proxies_to_try.append(ProxyManager.parse_proxy_to_config(p_str))
-
-            async def _attempt_with_config(specific_conf):
+            
+            # Helper for browser attempts
+            async def _attempt_with_config(specific_conf, profile: Dict[str, Any]):
                 browser = None
                 try:
                     launch_opts = {"headless": True}
@@ -224,12 +254,13 @@ class GsaAdapter(BaseAuctionAdapter):
 
                     browser = await p_engine.chromium.launch(**launch_opts)
                     context = await browser.new_context(
-                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-                        viewport={'width': 1920, 'height': 1080},
+                        user_agent=profile["ua"],
+                        viewport=profile["viewport"],
+                        is_mobile=profile["is_mobile"],
+                        has_touch=profile["is_mobile"],
                         extra_http_headers={
                             "Accept-Language": "en-US,en;q=0.9",
-                            "Sec-CH-UA": '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
-                            "Sec-CH-UA-Platform": '"Windows"'
+                            **profile["headers"]
                         }
                     )
                     page = await context.new_page()
@@ -280,12 +311,13 @@ class GsaAdapter(BaseAuctionAdapter):
 
             result = None
             for i, config in enumerate(proxies_to_try):
-                logger.info(f"[GSA-Browser] Attempt {i+1}/{len(proxies_to_try)} using: {config.get('server')}")
-                result = await _attempt_with_config(config)
+                profile = self._get_stealth_profile()
+                logger.info(f"[GSA-Browser] Attempt {i+1}/{len(proxies_to_try)} using: {config.get('server')} | Profile: {'Mobile' if profile['is_mobile'] else 'Desktop'}")
+                result = await _attempt_with_config(config, profile)
                 if result: break
             
             if not result:
                 logger.warning("[GSA-Browser] All proxies failed. Attempting LAST RESORT (DIRECT)...")
-                result = await _attempt_with_config(None)
+                result = await _attempt_with_config(None, self._get_stealth_profile())
             
             return result
