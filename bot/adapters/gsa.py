@@ -249,8 +249,8 @@ class GsaAdapter(BaseAuctionAdapter):
                             r"(\d{2}/\d{2}/\d{4}\s*\d{2}:\d{2}\s*[APM]{2})\s*CT",
                             r"(?:Closing Time|Ends)\s*[:\-]?\s*(\d{2}/\d{2}/\d{4}\s*\d{2}:\d{2}\s*[APM]{2})"
                         ]
-                        for p in patterns:
-                            m = re.search(p, await page.content(), re.I)
+                        for pat in patterns:
+                            m = re.search(pat, await page.content(), re.I)
                             if m:
                                 raw_closing = m.group(1).strip()
                                 break
