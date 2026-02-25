@@ -4,8 +4,10 @@ import re
 from datetime import datetime
 import pytz
 from typing import Optional, Dict, Any
-from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
+try:
+    from playwright_stealth import stealth_async
+except ImportError:
+    from playwright_stealth import stealth as stealth_async
 from .base_adapter import BaseAuctionAdapter
 
 logger = logging.getLogger(__name__)
@@ -131,8 +133,10 @@ class GsaAdapter(BaseAuctionAdapter):
             )
             page = await context.new_page()
             
-            # Apply anti-detection stealth
-            await stealth_async(page)
+            # Apply anti-detection stealth (handle both sync and async versions of the library)
+            stealth_task = stealth_async(page)
+            if asyncio.iscoroutine(stealth_task):
+                await stealth_task
             
             # OPTIMIZATION: Block heavy resources
             await page.route("**/*", lambda route: route.abort() 
