@@ -17,31 +17,46 @@ export const PREMIUM_MAP: Record<string, number> = {
 }
 
 export function getInitialPremium(url: string): number {
-  const lowercaseUrl = url.toLowerCase()
+  let hostname = "";
+  try {
+    const parsed = new URL(url);
+    hostname = parsed.hostname.toLowerCase();
+  } catch {
+    hostname = "";
+  }
+
   for (const [domain, percentage] of Object.entries(PREMIUM_MAP)) {
-    if (lowercaseUrl.includes(domain)) {
-      return percentage
+    const lowerDomain = domain.toLowerCase();
+    if (hostname === lowerDomain || hostname.endsWith("." + lowerDomain)) {
+      return percentage;
     }
   }
-  return 15.0 // Default fallback
+  return 15.0; // Default fallback
 }
 
 export function getSiteKey(url: string): string {
-  const lowercaseUrl = url.toLowerCase();
-  if (lowercaseUrl.includes("gsaauctions.gov")) return "gsa";
-  if (lowercaseUrl.includes("centurionservice.com")) return "centurion";
-  if (lowercaseUrl.includes("bidspotter.com")) return "bidspotter";
-  if (lowercaseUrl.includes("govplanet.com")) return "govplanet";
-  if (lowercaseUrl.includes("purplewave.com")) return "purplewave";
-  if (lowercaseUrl.includes("mazree.com")) return "mazree";
-  if (lowercaseUrl.includes("directbids.com")) return "directbids";
-  if (lowercaseUrl.includes("dotmed.com")) return "dotmed";
-  if (lowercaseUrl.includes("britishmedicalauctions.com")) return "bma";
-  if (lowercaseUrl.includes("surplusmarketplace.com")) return "surplusmarketplace";
-  if (lowercaseUrl.includes("globalmedauctions.com")) return "globalmed";
-  if (lowercaseUrl.includes("gcsurplus.ca")) return "gcsurplus";
-  if (lowercaseUrl.includes("publicsurplus.com")) return "publicsurplus";
-  if (lowercaseUrl.includes("troostwijkauctions.com")) return "troostwijk";
-  if (lowercaseUrl.includes("greenpulse.health")) return "greenpulse";
+  let hostname = "";
+  try {
+    const parsed = new URL(url);
+    hostname = parsed.hostname.toLowerCase();
+  } catch {
+    hostname = url.toLowerCase();
+  }
+
+  if (hostname === "gsaauctions.gov" || hostname.endsWith(".gsaauctions.gov")) return "gsa";
+  if (hostname === "centurionservice.com" || hostname.endsWith(".centurionservice.com")) return "centurion";
+  if (hostname === "bidspotter.com" || hostname.endsWith(".bidspotter.com")) return "bidspotter";
+  if (hostname === "govplanet.com" || hostname.endsWith(".govplanet.com")) return "govplanet";
+  if (hostname === "purplewave.com" || hostname.endsWith(".purplewave.com")) return "purplewave";
+  if (hostname === "mazree.com" || hostname.endsWith(".mazree.com")) return "mazree";
+  if (hostname === "directbids.com" || hostname.endsWith(".directbids.com")) return "directbids";
+  if (hostname === "dotmed.com" || hostname.endsWith(".dotmed.com")) return "dotmed";
+  if (hostname === "britishmedicalauctions.com" || hostname.endsWith(".britishmedicalauctions.com")) return "bma";
+  if (hostname === "surplusmarketplace.com" || hostname.endsWith(".surplusmarketplace.com")) return "surplusmarketplace";
+  if (hostname === "globalmedauctions.com" || hostname.endsWith(".globalmedauctions.com")) return "globalmed";
+  if (hostname === "gcsurplus.ca" || hostname.endsWith(".gcsurplus.ca")) return "gcsurplus";
+  if (hostname === "publicsurplus.com" || hostname.endsWith(".publicsurplus.com")) return "publicsurplus";
+  if (hostname === "troostwijkauctions.com" || hostname.endsWith(".troostwijkauctions.com")) return "troostwijk";
+  if (hostname === "greenpulse.health" || hostname.endsWith(".greenpulse.health")) return "greenpulse";
   return "mock"; // Default fallback
 }
