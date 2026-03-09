@@ -69,7 +69,8 @@ class GsaAdapter(BaseAuctionAdapter):
 
     async def _fetch_via_api(self, suid: str, original_url: str) -> Optional[Dict[str, Any]]:
         import httpx
-        api_url = f"https://gsaauctions.gov/gsaauctions/aucindx/?suid={suid}"
+        # New Verified API Endpoint
+        api_url = f"https://www.ppms.gov/gw/auction/ppms/api/v1/auctions/getAuction/{suid}"
         logger.info(f"[GSA-API] Fetching: {api_url}")
 
         async def _do_api_request(p_url: str, p_config: Optional[str], profile: Dict[str, Any]) -> Optional[httpx.Response]:
@@ -78,13 +79,14 @@ class GsaAdapter(BaseAuctionAdapter):
                 async with httpx.AsyncClient(timeout=20.0, verify=False, proxy=p_config) as client:
                     headers = {
                         "User-Agent": profile["ua"],
-                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                        "Accept": "application/json, text/plain, */*",
                         "Accept-Language": "en-US,en;q=0.9",
-                        "Referer": "https://gsaauctions.gov/auctions/",
+                        "Origin": "https://gsaauctions.gov",
+                        "Referer": "https://gsaauctions.gov/",
                         "DNT": "1",
-                        "Sec-Fetch-Dest": "document",
-                        "Sec-Fetch-Mode": "navigate",
-                        "Sec-Fetch-Site": "same-origin",
+                        "Sec-Fetch-Dest": "empty",
+                        "Sec-Fetch-Mode": "cors",
+                        "Sec-Fetch-Site": "cross-site",
                         "Sec-Fetch-User": "?1",
                         "Upgrade-Insecure-Requests": "1",
                         **profile["headers"]
@@ -145,17 +147,28 @@ class GsaAdapter(BaseAuctionAdapter):
                 logger.info(f"[GSA-API] Status: {response.status_code}")
                 try:
                     data = response.json()
-                    item_name = data.get("itemName") or data.get("lotName") or "GSA Item"
-                    if "403" in str(item_name):
-                        logger.warning(f"[GSA-API] Blocked name detected: {item_name}")
+                    # New ppms.gov API response mapping
+                    item_name = data.get("lotName") or data.get("itemName") or "GSA Item"
+                    
+                    if not item_name or "403" in str(item_name):
+                        logger.warning(f"[GSA-API] Blocked or empty name detected: {item_name}")
                         return None
+                        
+                    # Extract location details
+                    loc = data.get("location") or {}
+                    city = loc.get("city") or data.get("city", "Unknown")
+                    state = loc.get("state") or data.get("state", "Unknown")
+                    
+                    # Extract closing time
+                    closing_time = data.get("endDate") or data.get("closingTime") or data.get("auctionEndTime")
+                    
                     return {
-                        "item_name": item_name.strip()[:200],
+                        "item_name": str(item_name).strip()[:200],
                         "current_bid": float(str(data.get("currentBid", 0)).replace(",", "")),
-                        "total_bidders": int(data.get("bidderCount", 0)),
-                        "closing_time": data.get("closingTime") or data.get("auctionEndTime"),
-                        "city": data.get("city", "Unknown"),
-                        "state": data.get("state", "Unknown"),
+                        "total_bidders": int(data.get("numberOfBidders") or data.get("bidderCount", 0)),
+                        "closing_time": closing_time,
+                        "city": city,
+                        "state": state,
                         "website_name": "GSA Auctions",
                         "status": "active"
                     }
@@ -260,6 +273,8 @@ class GsaAdapter(BaseAuctionAdapter):
                         has_touch=profile["is_mobile"],
                         extra_http_headers={
                             "Accept-Language": "en-US,en;q=0.9",
+                            "Origin": "https://gsaauctions.gov",
+                            "Referer": "https://gsaauctions.gov/",
                             **profile["headers"]
                         }
                     )

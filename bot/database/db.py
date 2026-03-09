@@ -113,6 +113,7 @@ class DatabaseLayer:
             "last_scraped_at": now.isoformat(),
             "status": status,
             "error_message": None,
+            "retry_count": 0,
             "locked_until": None  # Always release lock
         }
         
@@ -123,15 +124,32 @@ class DatabaseLayer:
         Persists failure state and handles backoff.
         """
         now = datetime.now(timezone.utc)
-        next_fetch = now + timedelta(minutes=5)
         
-        logger.warning(f"[DB] Failure for {item_id[:8]}: {error_message}. Retry in 300s.")
-
+        try:
+            current_db_resp = self.supabase.table("auction_items").select("retry_count").eq("id", item_id).execute()
+            if current_db_resp.data:
+                current_retries = current_db_resp.data[0].get("retry_count") or 0
+            else:
+                current_retries = 0
+        except Exception as e:
+            logger.warning(f"[DB] Could not verify current retries for {item_id}: {e}")
+            current_retries = 0
+            
+        new_retries = current_retries + 1
+        
         payload = {
             "error_message": error_message,
-            "next_fetch_at": next_fetch.isoformat(),
+            "retry_count": new_retries,
             "locked_until": None
         }
+
+        if new_retries >= 3:
+            logger.error(f"[DB] Failure for {item_id[:8]} reached max retries ({new_retries}). Marking as error.")
+            payload["status"] = "error"
+        else:
+            next_fetch = now + timedelta(minutes=5)
+            logger.warning(f"[DB] Failure for {item_id[:8]}: {error_message}. Retry {new_retries}/3 in 300s.")
+            payload["next_fetch_at"] = next_fetch.isoformat()
         
         self.supabase.table("auction_items").update(payload).eq("id", item_id).execute()
 

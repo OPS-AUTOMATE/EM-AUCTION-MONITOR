@@ -57,7 +57,7 @@ class ProxyManager:
         else:
             selected_proxy = random.choice(proxies)
             
-        return self.parse_proxy_to_config(selected_proxy)
+        return ProxyManager.parse_proxy_to_config(selected_proxy)
 
     @staticmethod
     def get_all_proxies() -> List[str]:
