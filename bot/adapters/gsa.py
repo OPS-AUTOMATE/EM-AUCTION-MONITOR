@@ -273,8 +273,6 @@ class GsaAdapter(BaseAuctionAdapter):
                         has_touch=profile["is_mobile"],
                         extra_http_headers={
                             "Accept-Language": "en-US,en;q=0.9",
-                            "Origin": "https://gsaauctions.gov",
-                            "Referer": "https://gsaauctions.gov/",
                             **profile["headers"]
                         }
                     )
@@ -286,38 +284,64 @@ class GsaAdapter(BaseAuctionAdapter):
                         elif hasattr(playwright_stealth, "stealth_async"):
                             await playwright_stealth.stealth_async(page)
                     except: pass
-                    
+
+                    # --- NETWORK INTERCEPTION STRATEGY ---
+                    # Instead of calling ppms.gov directly (which gets blocked by IP),
+                    # we let the real browser navigate to gsaauctions.gov and 
+                    # intercept the ppms.gov XHR/fetch that the SPA makes natively.
+                    # This request carries real browser cookies/session context.
+                    captured_data = {}
+
+                    async def handle_response(response):
+                        try:
+                            if "ppms.gov" in response.url and "getAuction" in response.url and response.status == 200:
+                                json_body = await response.json()
+                                captured_data.update(json_body)
+                        except Exception:
+                            pass
+
+                    page.on("response", handle_response)
+
+                    # Block images/fonts to speed up load
                     await page.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "font", "media"] else route.continue_())
+                    
                     await page.goto(url, wait_until="domcontentloaded", timeout=60000)
                     await self._emulate_human(page)
-                    
-                    try: await page.wait_for_selector(".ppms-details-container", timeout=15000)
-                    except: pass
-                    
-                    content = await page.content()
-                    if any(block in content.lower() for block in ["access denied", "403 forbidden", "blocked"]):
-                        logger.warning("[GSA-Browser] Access Denied detected.")
-                        return None
-                    
-                    main_block = page.locator(".ppms-details-container").first
-                    full_text = await main_block.inner_text() if await main_block.count() > 0 else content
-                    item_name = "Unknown GSA Item"
-                    name_match = re.search(r"Item Name\s*:\s*(.*?)\s*Sale Lot Number", full_text, re.DOTALL | re.I)
-                    if name_match: item_name = name_match.group(1).strip()
-                    else:
-                        h1_count = await page.locator("h1").count()
-                        if h1_count > 0: item_name = (await page.locator("h1").first.inner_text()).strip()
 
-                    current_bid = 0.0
-                    price_match = re.search(r"Current Bid:\s*\$?\s*([\d,]+\.?\d*)", full_text, re.I)
-                    if price_match: current_bid = float(price_match.group(1).replace(",", ""))
+                    # Wait up to 15 seconds for the ppms.gov response to be intercepted
+                    for _ in range(30):
+                        if captured_data:
+                            break
+                        await asyncio.sleep(0.5)
+
+                    if not captured_data:
+                        # Check if the page itself shows something useful
+                        content = await page.content()
+                        if any(block in content.lower() for block in ["access denied", "403 forbidden", "blocked"]):
+                            logger.warning("[GSA-Browser] Access Denied detected.")
+                        else:
+                            logger.warning("[GSA-Browser] ppms.gov API response not captured.")
+                        return None
+
+                    logger.info(f"[GSA-Browser] Successfully intercepted ppms.gov response.")
+                    data = captured_data
+                    item_name = data.get("lotName") or data.get("itemName") or "GSA Item"
+                    loc = data.get("location") or {}
+                    city = loc.get("city") or data.get("city", "Unknown")
+                    state = loc.get("state") or data.get("state", "Unknown")
+                    closing_time = data.get("endDate") or data.get("closingTime") or data.get("auctionEndTime")
 
                     return {
-                        "item_name": item_name[:200],
-                        "current_bid": current_bid,
-                        "total_bidders": int((re.search(r"Bidders:\s*(\d+)", full_text, re.I) or re.search(r"(\d+)", "0")).group(1)),
-                        "website_name": "GSA Auctions", "status": "active", "city": "Unknown", "state": "Unknown"
+                        "item_name": str(item_name).strip()[:200],
+                        "current_bid": float(str(data.get("currentBid", 0)).replace(",", "")),
+                        "total_bidders": int(data.get("numberOfBidders") or data.get("bidderCount", 0)),
+                        "closing_time": closing_time,
+                        "city": city,
+                        "state": state,
+                        "website_name": "GSA Auctions",
+                        "status": "active"
                     }
+
                 except Exception as e:
                     logger.debug(f"[GSA-Browser] Attempt failed: {e}")
                     return None
