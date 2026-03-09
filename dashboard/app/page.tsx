@@ -16,7 +16,6 @@ import {
   Play,
   Pause,
   Filter,
-  ArrowUpDown,
   ArrowUp,
   ArrowDown,
   ExternalLink,
@@ -134,7 +133,7 @@ export default function Dashboard() {
         setAuctions((prev) => prev.filter((a) => a.id !== oldRecord.id));
       }
     },
-    [supabase],
+    [],
   );
 
   const playBuzzer = useCallback(() => {
@@ -443,14 +442,15 @@ export default function Dashboard() {
     }
   };
 
-  const handleInstantRefresh = async (id: string, currentStatus: string) => {
+  const handleInstantRefresh = async (id: string) => {
     console.log(`Triggering instant refresh for ${id}`);
 
     // 1. Calculate a "now" timestamp in ISO format
     const now = new Date().toISOString();
 
     // 2. Perform update: Status to 'active', next_fetch_at to now, protect with lock
-    const lockTime = new Date(Date.now() + 60000).toISOString();
+    const currentTime = Date.now();
+    const lockTime = new Date(currentTime + 60000).toISOString();
     const { error } = await supabase
       .from("auction_items")
       .update({
@@ -567,6 +567,8 @@ export default function Dashboard() {
 
       return sortOrder === "asc" ? tA - tB : tB - tA;
     });
+
+  const nowTimestamp = Date.now();
 
   return (
     <div className="dashboard-root">
@@ -784,7 +786,7 @@ export default function Dashboard() {
                     auction.status === "expired" ? "card-ended" : ""
                   } ${
                     auction.locked_until &&
-                    new Date(auction.locked_until).getTime() > Date.now()
+                    new Date(auction.locked_until).getTime() > nowTimestamp
                       ? "is-fetching"
                       : ""
                   }`}
@@ -795,7 +797,7 @@ export default function Dashboard() {
                         const isTimeUp =
                           auction.closing_time &&
                           new Date(auction.closing_time).getTime() <
-                            new Date().getTime();
+                            nowTimestamp;
                         const displayStatus =
                           auction.status === "expired" || isTimeUp
                             ? "expired"
@@ -821,9 +823,7 @@ export default function Dashboard() {
                     </div>
                     <div className="card-actions">
                       <button
-                        onClick={() =>
-                          handleInstantRefresh(auction.id, auction.status)
-                        }
+                        onClick={() => handleInstantRefresh(auction.id)}
                         className="action-btn btn-refresh"
                         title="Instant Refresh"
                       >
