@@ -204,11 +204,11 @@ export default function Dashboard() {
     playEmergencySiren();
   }, [soundEnabled]);
 
-  const [tick, setTick] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    // Tick is used to trigger re-renders for the live countdown
-    const timer = setInterval(() => setTick((prev) => prev + 1), 1000);
+    // Update live timestamp every second for countdowns
+    const timer = setInterval(() => setNow(Date.now()), 1000);
 
     // Safety Backup: Refresh full list every 60 seconds just in case Realtime hangs
     const safetyTimer = setInterval(() => {
@@ -251,7 +251,7 @@ export default function Dashboard() {
     if (hasNewCritical) {
       playBuzzer();
     }
-  }, [tick, auctions, soundEnabled, playBuzzer]);
+  }, [now, auctions, soundEnabled, playBuzzer]);
 
   const getRemainingTime = (
     closingTime: string | undefined,
@@ -442,42 +442,45 @@ export default function Dashboard() {
     }
   };
 
-  const handleInstantRefresh = async (id: string) => {
-    console.log(`Triggering instant refresh for ${id}`);
+  const handleInstantRefresh = useCallback(
+    async (id: string) => {
+      console.log(`Triggering instant refresh for ${id}`);
 
-    // 1. Calculate a "now" timestamp in ISO format
-    const now = new Date().toISOString();
+      // 1. Calculate a "now" timestamp in ISO format
+      const nowStr = new Date().toISOString();
 
-    // 2. Perform update: Status to 'active', next_fetch_at to now, protect with lock
-    const currentTime = Date.now();
-    const lockTime = new Date(currentTime + 60000).toISOString();
-    const { error } = await supabase
-      .from("auction_items")
-      .update({
-        status: "active",
-        next_fetch_at: now,
-        locked_until: lockTime,
-      })
-      .eq("id", id);
+      // 2. Perform update: Status to 'active', next_fetch_at to now, protect with lock
+      const currentTime = Date.now();
+      const lockTime = new Date(currentTime + 60000).toISOString();
+      const { error } = await supabase
+        .from("auction_items")
+        .update({
+          status: "active",
+          next_fetch_at: nowStr,
+          locked_until: lockTime,
+        })
+        .eq("id", id);
 
-    if (error) {
-      console.error("Instant refresh error:", error);
-      alert("Failed to trigger refresh. Please try again.");
-    } else {
-      // Optimistic update for visual feedback
-      setAuctions((prev) =>
-        prev.map((a) =>
-          a.id === id
-            ? {
-                ...a,
-                status: "active",
-                locked_until: new Date(Date.now() + 60000).toISOString(), // Mock lock for immediate feedback
-              }
-            : a,
-        ),
-      );
-    }
-  };
+      if (error) {
+        console.error("Instant refresh error:", error);
+        alert("Failed to trigger refresh. Please try again.");
+      } else {
+        // Optimistic update for visual feedback
+        setAuctions((prev) =>
+          prev.map((a) =>
+            a.id === id
+              ? {
+                  ...a,
+                  status: "active",
+                  locked_until: new Date(currentTime + 60000).toISOString(), // Use stable currentTime
+                }
+              : a,
+          ),
+        );
+      }
+    },
+    [supabase],
+  );
 
   const handlePauseAll = async () => {
     if (!user) return;
@@ -567,8 +570,6 @@ export default function Dashboard() {
 
       return sortOrder === "asc" ? tA - tB : tB - tA;
     });
-
-  const nowTimestamp = Date.now();
 
   return (
     <div className="dashboard-root">
@@ -786,7 +787,7 @@ export default function Dashboard() {
                     auction.status === "expired" ? "card-ended" : ""
                   } ${
                     auction.locked_until &&
-                    new Date(auction.locked_until).getTime() > nowTimestamp
+                    new Date(auction.locked_until).getTime() > now
                       ? "is-fetching"
                       : ""
                   }`}
@@ -796,8 +797,7 @@ export default function Dashboard() {
                       {(() => {
                         const isTimeUp =
                           auction.closing_time &&
-                          new Date(auction.closing_time).getTime() <
-                            nowTimestamp;
+                          new Date(auction.closing_time).getTime() < now;
                         const displayStatus =
                           auction.status === "expired" || isTimeUp
                             ? "expired"
@@ -809,7 +809,7 @@ export default function Dashboard() {
 
                         const isFetching =
                           auction.locked_until &&
-                          new Date(auction.locked_until).getTime() > Date.now();
+                          new Date(auction.locked_until).getTime() > now;
 
                         return (
                           <>
