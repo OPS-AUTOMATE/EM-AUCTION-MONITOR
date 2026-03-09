@@ -86,48 +86,28 @@ class GovPlanetAdapter(BaseAuctionAdapter):
                     return ""
 
                 # 1. Title
-                # User XPath: /html/body/div[2]/div[3]/div[1]/div/div[2]/div/div[1]/div/h1
-                # Robust: h1.itemdesc
-                item_name = await get_text_safe('h1.itemdesc')
-                if not item_name:
-                    item_name = await get_text_safe('h1')
+                item_name = await get_text_safe('h1.itemdesc, h1')
 
                 # 2. Location
-                # User XPath: .../div[3]/div[2]/span
-                # Robust: .location, [itemprop="availableAtOrFrom"]
-                location = await get_text_safe('.location, [itemprop="availableAtOrFrom"], .item-location')
+                # Looking for label "LOCATION" and getting sibling value
+                location = await get_text_safe('xpath=//div[contains(@class, "item-details-label") and contains(translate(text(), "location", "LOCATION"), "LOCATION")]/following-sibling::div[contains(@class, "item-details-value")]')
                 if not location:
-                     location = await get_text_safe('xpath=/html/body/div[2]/div[3]/div[1]/div/div[2]/div/div[3]/div[2]/span')
+                    location = await get_text_safe('.location, [itemprop="availableAtOrFrom"], .item-location')
 
                 # 3. No. of Bids
-                # Construct specific selector if ID known
-                bids_text = ""
-                if item_id:
-                     # ID has $ which needs escaping in CSS selector
-                     # Use attribute selector: [id="IP$ITEMID_bidcountItemstring"]
-                     bids_selector = f'[id="IP${item_id}_bidcountItemstring"]'
-                     bids_text = await get_text_safe(bids_selector)
-                
+                bids_selector = f'[id="IP${item_id}_bidcountItemstring"]' if item_id else '[id*="_bidcountItemstring"]'
+                bids_text = await get_text_safe(bids_selector)
                 if not bids_text:
-                    bids_text = await get_text_safe('[id*="_bidcountItemstring"]') 
-                if not bids_text:
-                    bids_text = await get_text_safe('xpath=/html/body/div[2]/div[3]/div[1]/div/div[3]/div[2]/div[5]/div/div/div/div[1]/div[3]/div[2]/div/div[2]/span/nobr/b/span')
+                    bids_text = await get_text_safe('xpath=//div[contains(@class, "item-details-label") and contains(translate(text(), "bid", "BID"), "BID")]/following-sibling::div[contains(@class, "item-details-value")]')
 
                 # 4. Auction Date/Time
-                time_text = ""
-                if item_id:
-                    time_text = await get_text_safe(f'[id="IP${item_id}_timeBox"]')
-                
+                time_text = await get_text_safe(f'[id="IP${item_id}_timeBox"]' if item_id else '[id*="_timeBox"]')
                 if not time_text:
-                    time_text = await get_text_safe('[id*="_timeBox"]')
+                    time_text = await get_text_safe('xpath=//div[contains(@class, "item-details-label") and contains(translate(text(), "auction date", "AUCTION DATE"), "AUCTION DATE")]/following-sibling::div[contains(@class, "item-details-value")]')
 
                 # 5. Price
-                price_text = ""
-                if item_id:
-                     price_text = await get_text_safe(f'[id="IP${item_id}_price"]')
-                
-                if not price_text:
-                     price_text = await get_text_safe('[id*="_price"], .current-bid, .price')
+                price_selector = f'[id="IP${item_id}_price"]' if item_id else '[id*="_price"], .current-bid, .price'
+                price_text = await get_text_safe(price_selector)
 
                 # Parse data
                 current_bid = 0.0
@@ -150,29 +130,40 @@ class GovPlanetAdapter(BaseAuctionAdapter):
                 closing_time_iso = None
                 if time_text:
                     try:
-                        clean_time = time_text.strip()
-                        # Handle "Feb 17, time TBD" or just "Feb 17"
-                        # Regex to find Month and Day
-                        date_match = re.search(r'([A-Z][a-z]{2})\s*(\d{1,2})', clean_time, re.I)
-                        if date_match:
-                            month_str = date_match.group(1)
-                            day_val = int(date_match.group(2))
-                            # Default to current year or next if month already passed? 
-                            # Usually these are future auctions.
-                            now = datetime.now()
-                            # Minimal parsing
-                            months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-                            month_idx = months.index(month_str.capitalize()) + 1
-                            
-                            # Use aware datetime to prevent engine overlap errors
-                            dt = datetime(now.year, month_idx, day_val, 0, 0, 0)
-                            # If the date is very far in the past, move to next year
-                            if dt < now - timedelta(days=30):
-                                dt = dt.replace(year=now.year + 1)
-                            
-                            # Add UTC offset to string
-                            closing_time_iso = dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
-                    except:
+                        from dateutil import parser as date_parser
+                        # GovPlanet format is often "Mar 10, 12:09 PM - 12:10 PM PDT"
+                        # We take the start time part (before the dash)
+                        time_to_parse = time_text.split("-")[0].strip()
+                        
+                        # Handle potential timezone at the end of the full string
+                        timezone_match = re.search(r'\b([A-Z]{3,4})\b$', time_text.strip())
+                        timezone_suffix = f" {timezone_match.group(1)}" if timezone_match else ""
+                        
+                        full_parse_str = f"{time_to_parse}{timezone_suffix}"
+                        
+                        # Define common US timezones for dateutil
+                        tzinfos = {
+                            "PDT": -7 * 3600, "PST": -8 * 3600,
+                            "EDT": -4 * 3600, "EST": -5 * 3600,
+                            "CDT": -5 * 3600, "CST": -6 * 3600,
+                            "MDT": -6 * 3600, "MST": -7 * 3600,
+                        }
+                        
+                        dt = date_parser.parse(full_parse_str, tzinfos=tzinfos)
+                        
+                        # Ensure year is reasonable (parser might default to current year if missing, or 1900 if offset 0)
+                        now = datetime.now()
+                        if dt.year < 2000:
+                            dt = dt.replace(year=now.year)
+                        
+                        # If date has passed significantly (e.g. Dec item but it is currently Jan), it might be next year
+                        if dt < now - timedelta(days=60):
+                             dt = dt.replace(year=now.year + 1)
+                             
+                        closing_time_iso = dt.isoformat()
+                    except Exception as e:
+                        logger.warning(f"[GovPlanet] Date parsing failed for '{time_text}': {e}")
+                        # Fallback to simple regex if dateutil fails
                         pass
 
                 return {
