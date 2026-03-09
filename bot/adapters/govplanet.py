@@ -89,8 +89,8 @@ class GovPlanetAdapter(BaseAuctionAdapter):
                 item_name = await get_text_safe('h1.itemdesc, h1')
 
                 # 2. Location
-                # Looking for label "LOCATION" and getting sibling value
-                location = await get_text_safe('xpath=//div[contains(@class, "item-details-label") and contains(translate(text(), "location", "LOCATION"), "LOCATION")]/following-sibling::div[contains(@class, "item-details-value")]')
+                # Extra robust label-based search
+                location = await get_text_safe('xpath=//*[contains(@class, "label") and contains(translate(.), "location", "LOCATION"), "LOCATION")]/following-sibling::*[contains(@class, "value")]')
                 if not location:
                     location = await get_text_safe('.location, [itemprop="availableAtOrFrom"], .item-location')
 
@@ -98,12 +98,12 @@ class GovPlanetAdapter(BaseAuctionAdapter):
                 bids_selector = f'[id="IP${item_id}_bidcountItemstring"]' if item_id else '[id*="_bidcountItemstring"]'
                 bids_text = await get_text_safe(bids_selector)
                 if not bids_text:
-                    bids_text = await get_text_safe('xpath=//div[contains(@class, "item-details-label") and contains(translate(text(), "bid", "BID"), "BID")]/following-sibling::div[contains(@class, "item-details-value")]')
+                    bids_text = await get_text_safe('xpath=//*[contains(@class, "label") and contains(translate(.), "bid", "BID"), "BID")]/following-sibling::*[contains(@class, "value")]')
 
                 # 4. Auction Date/Time
                 time_text = await get_text_safe(f'[id="IP${item_id}_timeBox"]' if item_id else '[id*="_timeBox"]')
                 if not time_text:
-                    time_text = await get_text_safe('xpath=//div[contains(@class, "item-details-label") and contains(translate(text(), "auction date", "AUCTION DATE"), "AUCTION DATE")]/following-sibling::div[contains(@class, "item-details-value")]')
+                    time_text = await get_text_safe('xpath=//*[contains(@class, "label") and contains(translate(.), "auction date", "AUCTION DATE"), "AUCTION DATE")]/following-sibling::*[contains(@class, "value")]')
 
                 # 5. Price
                 price_selector = f'[id="IP${item_id}_price"]' if item_id else '[id*="_price"], .current-bid, .price'
@@ -121,10 +121,15 @@ class GovPlanetAdapter(BaseAuctionAdapter):
                 # Location parsing
                 city, state = "Unknown", "Unknown"
                 if location:
-                    parts = location.split(',')
+                    # Handle "City, State, Country. Zip"
+                    # Remove the trailing country/zip part if present (e.g., ", United States. 89030")
+                    clean_loc = re.sub(r',\s*United States.*$', '', location, flags=re.I).strip()
+                    parts = [p.strip() for p in clean_loc.split(',')]
                     if len(parts) >= 2:
-                        city = parts[0].strip()
-                        state = parts[1].strip()
+                        city = parts[0]
+                        state = parts[1]
+                    elif len(parts) == 1:
+                        city = parts[0]
 
                 # 6. Calculate ISO closing time
                 closing_time_iso = None

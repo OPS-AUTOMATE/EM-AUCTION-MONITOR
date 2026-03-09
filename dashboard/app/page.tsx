@@ -940,8 +940,10 @@ export default function Dashboard() {
                               hour: "numeric",
                               minute: "2-digit",
                               hour12: true,
+                              timeZone: "Asia/Karachi",
                             },
-                          )}
+                          )}{" "}
+                          PKT
                         </div>
                       )}
                     </div>
