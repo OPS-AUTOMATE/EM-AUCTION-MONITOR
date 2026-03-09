@@ -156,13 +156,23 @@ class GovPlanetAdapter(BaseAuctionAdapter):
                         
                         dt = date_parser.parse(full_parse_str, tzinfos=tzinfos)
                         
-                        # Ensure year is reasonable (parser might default to current year if missing, or 1900 if offset 0)
-                        now = datetime.now()
+                        # Ensure year is reasonable (parser might default to current year if missing)
+                        now = datetime.now(timezone.utc)
+                        
+                        # If dt is naive (no timezone in string), assume UTC for comparison
+                        compare_dt = dt
+                        if compare_dt.tzinfo is None:
+                            compare_dt = compare_dt.replace(tzinfo=timezone.utc)
+
                         if dt.year < 2000:
                             dt = dt.replace(year=now.year)
                         
+                        # Re-calculate compare_dt with new year if it changed
+                        if compare_dt.year < 2000:
+                            compare_dt = compare_dt.replace(year=now.year)
+
                         # If date has passed significantly (e.g. Dec item but it is currently Jan), it might be next year
-                        if dt < now - timedelta(days=60):
+                        if compare_dt < now - timedelta(days=60):
                              dt = dt.replace(year=now.year + 1)
                              
                         closing_time_iso = dt.isoformat()

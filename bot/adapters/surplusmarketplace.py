@@ -3,6 +3,8 @@ import logging
 import re
 from typing import Optional, Dict, Any
 from playwright.async_api import async_playwright
+from datetime import datetime, timedelta, timezone
+from dateutil import parser as date_parser
 from .base_adapter import BaseAuctionAdapter
 
 logger = logging.getLogger(__name__)
@@ -68,6 +70,10 @@ class SurplusMarketplaceAdapter(BaseAuctionAdapter):
                 location_xpath = 'xpath=/html/body/div/div[1]/div/div/div/div[1]/div[2]/div/div[1]/div[6]/div/p/span'
                 location = await get_text_safe(location_xpath)
 
+                # 6. Specific End Time (Experimental)
+                ends_at_xpath = 'xpath=//*[contains(text(), "Ends at:")]'
+                ends_at_text = await get_text_safe(ends_at_xpath)
+
                 # Parse Price
                 current_bid = 0.0
                 try:
@@ -80,19 +86,57 @@ class SurplusMarketplaceAdapter(BaseAuctionAdapter):
                 # Parse Location
                 city, state = "Unknown", "Unknown"
                 if location:
-                    # Generic parser since format is unknown but likely "City, State"
                     parts = location.split(',')
                     if len(parts) >= 2:
                         city = parts[0].strip()
                         state = parts[1].strip()
 
-                # Parse Buyer Premium (e.g. "13%" -> 13.0)
+                # Parse Buyer Premium
                 premium_value = None
                 if buyer_premium:
                     try:
                         premium_value = float(re.sub(r'[^\d.]', '', buyer_premium.strip()))
-                    except (ValueError, TypeError):
+                    except:
                         pass
+
+                # --- ADVANCED DATE PARSING ---
+                closing_time_iso = None
+                now_utc = datetime.now(timezone.utc)
+
+                # Strategy A: Parse "Ends at: MM/DD/YY - HH:mm"
+                if ends_at_text and "Ends at:" in ends_at_text:
+                    try:
+                        date_str = ends_at_text.replace("Ends at:", "").strip()
+                        # Format: 03/13/26 - 22:13
+                        # We assume Central Time (CST/CDT) as per site location, but parse it
+                        dt = date_parser.parse(date_str)
+                        # If no timezone, assume US/Central (approx -6)
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone(timedelta(hours=-6)))
+                        closing_time_iso = dt.isoformat()
+                    except Exception as e:
+                        logger.warning(f"[SurplusMarketplace] Static date parse failed: {e}")
+
+                # Strategy B: Parse Countdown Fallback (e.g. "3d 21h:1m 47s")
+                if not closing_time_iso and time_left:
+                    try:
+                        # Normalize string
+                        clean_time = time_left.replace(":", " ").strip()
+                        days = re.search(r'(\d+)d', clean_time)
+                        hours = re.search(r'(\d+)h', clean_time)
+                        mins = re.search(r'(\d+)m', clean_time)
+                        secs = re.search(r'(\d+)s', clean_time)
+
+                        d = int(days.group(1)) if days else 0
+                        h = int(hours.group(1)) if hours else 0
+                        m = int(mins.group(1)) if mins else 0
+                        s = int(secs.group(1)) if secs else 0
+
+                        if d or h or m or s:
+                            dt = now_utc + timedelta(days=d, hours=h, minutes=m, seconds=s)
+                            closing_time_iso = dt.isoformat()
+                    except Exception as e:
+                        logger.warning(f"[SurplusMarketplace] Countdown parse failed: {e}")
 
                 return {
                     "item_name": item_name.strip()[:200],
@@ -101,6 +145,7 @@ class SurplusMarketplaceAdapter(BaseAuctionAdapter):
                     "state": state,
                     "time_remaining_str": time_left.strip(),
                     "premium_percentage": premium_value,
+                    "closing_time": closing_time_iso,
                     "website_name": "Surplus Marketplace",
                     "status": "active"
                 }
