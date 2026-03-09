@@ -86,13 +86,21 @@ class SurplusMarketplaceAdapter(BaseAuctionAdapter):
                         city = parts[0].strip()
                         state = parts[1].strip()
 
+                # Parse Buyer Premium (e.g. "13%" -> 13.0)
+                premium_value = None
+                if buyer_premium:
+                    try:
+                        premium_value = float(re.sub(r'[^\d.]', '', buyer_premium.strip()))
+                    except (ValueError, TypeError):
+                        pass
+
                 return {
                     "item_name": item_name.strip()[:200],
                     "current_bid": current_bid,
                     "city": city,
                     "state": state,
                     "time_remaining_str": time_left.strip(),
-                    "premium_percentage": buyer_premium.strip(),
+                    "premium_percentage": premium_value,
                     "website_name": "Surplus Marketplace",
                     "status": "active"
                 }
