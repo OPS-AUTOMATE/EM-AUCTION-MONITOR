@@ -250,17 +250,9 @@ class GsaAdapter(BaseAuctionAdapter):
                 try:
                     launch_opts = {"headless": True}
                     if specific_conf:
-                        p_server = specific_conf.get("server", "")
-                        p_user = specific_conf.get("username")
-                        p_pass = specific_conf.get("password")
-                        clean_host = p_server.replace("http://", "").replace("https://", "")
-                        safe_user = urllib.parse.quote(p_user) if p_user else ""
-                        safe_pass = urllib.parse.quote(p_pass) if p_pass else ""
-                        p_url = f"http://{safe_user}:{safe_pass}@{clean_host}" if p_user else f"http://{clean_host}"
-                        
-                        if not await self._is_proxy_healthy(p_url):
-                            logger.warning(f"[GSA-Health] Skipping proxy: {p_server}")
-                            return None
+                        # Use the proxy config directly — Playwright handles auth natively.
+                        # Removed pre-flight health check as it was causing all ISP proxies
+                        # to fail silently before the browser could even try.
                         launch_opts["proxy"] = specific_conf
                     else:
                         logger.info("[GSA-Browser] Attempting DIRECT connection...")
