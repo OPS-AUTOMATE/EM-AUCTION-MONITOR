@@ -336,7 +336,7 @@ class GsaAdapter(BaseAuctionAdapter):
                     }
 
                 except Exception as e:
-                    logger.debug(f"[GSA-Browser] Attempt failed: {e}")
+                    logger.warning(f"[GSA-Browser] Attempt failed ({type(e).__name__}): {e}")
                     return None
                 finally:
                     if browser: await browser.close()

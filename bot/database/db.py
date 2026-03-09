@@ -136,6 +136,13 @@ class DatabaseLayer:
             current_retries = 0
             
         new_retries = current_retries + 1
+
+        # If the item was previously in 'error' state and the user manually re-activated it,
+        # the retry_count was never reset. Detect this by checking if retries already exceeded
+        # the limit — if so, treat this as a fresh cycle (reset to 1).
+        if current_retries >= 3:
+            logger.info(f"[DB] Item {item_id[:8]} was re-activated after error. Resetting retry counter.")
+            new_retries = 1
         
         payload = {
             "error_message": error_message,
