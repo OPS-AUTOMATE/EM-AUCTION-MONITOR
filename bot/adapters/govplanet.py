@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from playwright.async_api import async_playwright
 from .base_adapter import BaseAuctionAdapter
