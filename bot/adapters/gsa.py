@@ -294,7 +294,8 @@ class GsaAdapter(BaseAuctionAdapter):
 
                     async def handle_response(response):
                         try:
-                            if "ppms.gov" in response.url and "getAuction" in response.url and response.status == 200:
+                            parsed = urllib.parse.urlparse(response.url)
+                            if parsed.hostname == "www.ppms.gov" and "getAuction" in parsed.path and response.status == 200:
                                 json_body = await response.json()
                                 captured_data.update(json_body)
                         except Exception:
