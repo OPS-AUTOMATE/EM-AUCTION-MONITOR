@@ -10,7 +10,6 @@ CREATE TABLE IF NOT EXISTS auction_items (
     item_name TEXT DEFAULT 'Syncing...',
     current_bid NUMERIC DEFAULT 0,
     premium_percentage NUMERIC DEFAULT 15,
-    buyer_premium TEXT,
     total_bidders INTEGER DEFAULT 0,
     closing_time TIMESTAMPTZ,
     -- High frequency updates based on this

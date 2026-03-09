@@ -91,8 +91,8 @@ class SurplusMarketplaceAdapter(BaseAuctionAdapter):
                     "current_bid": current_bid,
                     "city": city,
                     "state": state,
-                    "time_left": time_left.strip(),
-                    "buyer_premium": buyer_premium.strip(),
+                    "time_remaining_str": time_left.strip(),
+                    "premium_percentage": buyer_premium.strip(),
                     "website_name": "Surplus Marketplace",
                     "status": "active"
                 }
