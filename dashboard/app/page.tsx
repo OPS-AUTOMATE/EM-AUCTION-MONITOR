@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { createClient } from "@/utils/supabase-browser";
+import { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 import { useRouter } from "next/navigation";
 import { getInitialPremium, getSiteKey } from "@/utils/constants";
 import {
@@ -34,6 +35,7 @@ interface User {
 
 interface Auction {
   id: string;
+  user_id?: string;
   item_name?: string;
   current_bid?: number;
   premium_percentage?: number;
@@ -48,17 +50,20 @@ interface Auction {
   closing_time?: string;
   status: "active" | "paused" | "pending" | "error" | "expired";
   locked_until?: string | null;
+  owner?: {
+    email: string;
+  };
 }
 
-interface RealtimeUpdatePayload {
-  eventType: "INSERT" | "UPDATE" | "DELETE";
-  new: Auction;
-  old: { id: string };
+interface ExtendedWindow extends Window {
+  webkitAudioContext?: typeof AudioContext;
 }
 
 export default function Dashboard() {
   const [user, setUser] = useState<User | null>(null);
   const [auctions, setAuctions] = useState<Auction[]>([]);
+  const [profile, setProfile] = useState<{ is_admin: boolean } | null>(null);
+  const [masterViewActive, setMasterViewActive] = useState(true);
   const [newUrl, setNewUrl] = useState("");
   const [addingItem, setAddingItem] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -76,12 +81,19 @@ export default function Dashboard() {
   const [supabase] = useState(() => createClient());
 
   const fetchAuctions = useCallback(
-    async (userId: string) => {
-      const { data } = await supabase
+    async (userId: string, isAdminView: boolean) => {
+      let query = supabase
         .from("auction_items")
-        .select("*")
-        .eq("user_id", userId)
-        .order("created_at", { ascending: false });
+        .select(`
+          *,
+          owner:profiles!user_id(email)
+        `);
+      
+      if (!isAdminView) {
+        query = query.eq("user_id", userId);
+      }
+      
+      const { data } = await query.order("created_at", { ascending: false });
 
       if (data) setAuctions(data as Auction[]);
     },
@@ -91,24 +103,37 @@ export default function Dashboard() {
   const handleManualRefresh = useCallback(async () => {
     if (!user) return;
     setIsRefreshing(true);
-    await fetchAuctions(user.id);
+    await fetchAuctions(user.id, !!(profile?.is_admin && masterViewActive));
     // Brief delay for visual feedback
     setTimeout(() => setIsRefreshing(false), 800);
-  }, [user, fetchAuctions]);
+  }, [user, profile, masterViewActive, fetchAuctions]);
 
   const handleRealtimeUpdate = useCallback(
-    async (payload: RealtimeUpdatePayload) => {
+    async (payload: RealtimePostgresChangesPayload<Auction>) => {
       console.log("🔔 Realtime Event Received:", payload.eventType, payload);
       const { eventType, new: newRecord, old: oldRecord } = payload;
 
       if (eventType === "INSERT") {
+        // For Admins, fetch the owner email for the new item
+        let itemToInsert = newRecord;
+        if (profile?.is_admin && newRecord.user_id) {
+          const { data: profileData } = await supabase
+            .from("profiles")
+            .select("email")
+            .eq("id", newRecord.user_id)
+            .single();
+          if (profileData) {
+            itemToInsert = { ...newRecord, owner: profileData as { email: string } };
+          }
+        }
+
         setAuctions((prev) => {
           // Prevent duplicates if item already exists
-          if (prev.some((a) => a.id === newRecord.id)) return prev;
-          return [newRecord, ...prev];
+          if (prev.some((a) => a.id === itemToInsert.id)) return prev;
+          return [itemToInsert, ...prev];
         });
       } else if (eventType === "UPDATE") {
-        const targetId = newRecord.id || oldRecord.id;
+        const targetId = newRecord.id || (oldRecord as { id: string }).id;
         if (!targetId) return;
 
         // Realtime Update Handler
@@ -130,10 +155,10 @@ export default function Dashboard() {
           }),
         );
       } else if (eventType === "DELETE") {
-        setAuctions((prev) => prev.filter((a) => a.id !== oldRecord.id));
+        setAuctions((prev) => prev.filter((a) => a.id !== (oldRecord as Auction).id));
       }
     },
-    [],
+    [profile, supabase],
   );
 
   const playBuzzer = useCallback(() => {
@@ -146,8 +171,7 @@ export default function Dashboard() {
 
     const AudioContextClass =
       window.AudioContext ||
-      (window as unknown as { webkitAudioContext: typeof AudioContext })
-        .webkitAudioContext;
+      (window as ExtendedWindow).webkitAudioContext;
     if (!AudioContextClass) return;
 
     const audioCtx = new AudioContextClass();
@@ -212,20 +236,19 @@ export default function Dashboard() {
 
     // Safety Backup: Refresh full list every 60 seconds just in case Realtime hangs
     const safetyTimer = setInterval(() => {
-      if (user) fetchAuctions(user.id);
+      if (user) fetchAuctions(user.id, !!(profile?.is_admin && masterViewActive));
     }, 60000);
 
     return () => {
       clearInterval(timer);
       clearInterval(safetyTimer);
     };
-  }, [user, fetchAuctions]);
+  }, [user, profile, masterViewActive, fetchAuctions]);
 
   // Monitor for critical items and buzz
   useEffect(() => {
     if (!soundEnabled) return;
 
-    const now = new Date().getTime();
     let hasNewCritical = false;
 
     auctions.forEach((auction) => {
@@ -303,19 +326,32 @@ export default function Dashboard() {
         router.push("/login");
       } else {
         setUser(session.user as User);
-        fetchAuctions(session.user.id);
+        
+        // Fetch Profile
+        const { data: profileData } = await supabase
+          .from("profiles")
+          .select("is_admin")
+          .eq("id", session.user.id)
+          .single();
+        
+        if (profileData) {
+          setProfile(profileData);
+          fetchAuctions(session.user.id, !!(profileData.is_admin && masterViewActive));
+        } else {
+          fetchAuctions(session.user.id, false);
+        }
       }
     };
     checkUser();
 
     const channel = supabase
       .channel("schema-db-changes")
-      .on(
+      .on<Auction>(
         "postgres_changes",
         { event: "*", schema: "public", table: "auction_items" },
         (payload) => {
           console.log("🔄 Real-time Update Received:", payload);
-          handleRealtimeUpdate(payload as unknown as RealtimeUpdatePayload);
+          handleRealtimeUpdate(payload);
         },
       )
       .subscribe();
@@ -323,7 +359,7 @@ export default function Dashboard() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [router, supabase, fetchAuctions, handleRealtimeUpdate]);
+  }, [router, supabase, fetchAuctions, handleRealtimeUpdate, masterViewActive]);
 
   const handleAddItem = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -610,9 +646,23 @@ export default function Dashboard() {
               <div className="avatar">{user?.email?.[0].toUpperCase()}</div>
               <div className="user-details">
                 <span className="email-label">{user?.email}</span>
-                <span className="role-label">Procurement Admin</span>
+                <span className={`role-label ${profile?.is_admin ? "admin-tag" : ""}`}>
+                  {profile?.is_admin ? "Master Admin" : "Procurement User"}
+                </span>
               </div>
             </div>
+            {profile?.is_admin && (
+              <button
+                onClick={() => {
+                  const newState = !masterViewActive;
+                  setMasterViewActive(newState);
+                  if (user) fetchAuctions(user.id, newState);
+                }}
+                className={`pill master-toggle-btn ${masterViewActive ? "active" : "ghost"}`}
+              >
+                {masterViewActive ? "Master View: ON" : "Master View: OFF"}
+              </button>
+            )}
             <button
               onClick={() => setSoundEnabled(!soundEnabled)}
               className={`icon-btn sound ${soundEnabled ? "active" : ""}`}
@@ -864,6 +914,11 @@ export default function Dashboard() {
                     <h2 className="item-title">
                       {auction.item_name || "Processing URL..."}
                     </h2>
+                    {profile?.is_admin && auction.owner?.email && (
+                      <div className="owner-tag">
+                        Owner: {auction.owner.email}
+                      </div>
+                    )}
                     <div className="meta-strip">
                       <div className="meta-pill">
                         <MapPin size={12} />
@@ -1079,11 +1134,20 @@ export default function Dashboard() {
           font-weight: 600;
           color: var(--text-primary);
         }
-        .role-label {
-          font-size: 11px;
+        .role-label.admin-tag {
+          color: #10b981;
+          font-weight: 700;
+        }
+        .owner-tag {
+          font-size: 10px;
           color: var(--text-secondary);
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
+          background: rgba(74, 122, 181, 0.1);
+          padding: 2px 8px;
+          border-radius: 4px;
+          display: inline-block;
+          margin-top: -8px;
+          margin-bottom: 8px;
+          font-weight: 600;
         }
         .icon-btn {
           background: none;
@@ -1093,6 +1157,9 @@ export default function Dashboard() {
           padding: 8px;
           border-radius: 50%;
           transition: all 0.2s;
+        }
+        .master-toggle-btn {
+          margin-left: 10px;
         }
         .icon-btn:hover {
           background: rgba(0, 0, 0, 0.05);
