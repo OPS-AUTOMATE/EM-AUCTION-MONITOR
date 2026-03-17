@@ -76,26 +76,51 @@ export default function Dashboard() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const buzzedItems = useRef<Set<string>>(new Set());
   const lastBuzzerTime = useRef<number>(0);
+  const [selectedUser, setSelectedUser] = useState<string>("all");
+  const [allProfiles, setAllProfiles] = useState<{ id: string; email: string }[]>([]);
   const router = useRouter();
   // CRITICAL: Initialize supabase once, do NOT create on every render
   const [supabase] = useState(() => createClient());
 
   const fetchAuctions = useCallback(
     async (userId: string, isAdminView: boolean) => {
-      let query = supabase
+      // Try with join first
+      let { data, error } = await supabase
         .from("auction_items")
         .select(`
           *,
           owner:profiles!user_id(email)
-        `);
-      
-      if (!isAdminView) {
-        query = query.eq("user_id", userId);
-      }
-      
-      const { data } = await query.order("created_at", { ascending: false });
+        `)
+        .eq(isAdminView ? "" : "user_id", isAdminView ? undefined : userId)
+        .order("created_at", { ascending: false });
 
-      if (data) setAuctions(data as Auction[]);
+      if (error && error.code === 'PGRST200') {
+          // Fallback: Simple fetch without join
+          const fallback = await supabase
+            .from("auction_items")
+            .select("*")
+            .eq(isAdminView ? "" : "user_id", isAdminView ? undefined : userId)
+            .order("created_at", { ascending: false });
+          
+          data = fallback.data;
+          error = fallback.error;
+      }
+
+      if (error) {
+        console.error("fetchAuctions error:", error);
+      } else {
+        if (data) {
+          // Manual email patching if join was missing
+          const auctionsWithEmails = await Promise.all((data as Auction[]).map(async (item) => {
+              if (isAdminView && !item.owner) {
+                 const { data: p } = await supabase.from('profiles').select('email').eq('id', item.user_id).maybeSingle();
+                 return { ...item, owner: p || { email: 'Unknown' } };
+              }
+              return item;
+          }));
+          setAuctions(auctionsWithEmails as Auction[]);
+        }
+      }
     },
     [supabase],
   );
@@ -322,23 +347,50 @@ export default function Dashboard() {
       const {
         data: { session },
       } = await supabase.auth.getSession();
+      
       if (!session) {
         router.push("/login");
       } else {
         setUser(session.user as User);
         
         // Fetch Profile
-        const { data: profileData } = await supabase
+        const { data: profileData, error: profileErr } = await supabase
           .from("profiles")
-          .select("is_admin")
+          .select("*")
           .eq("id", session.user.id)
-          .single();
-        
+          .maybeSingle();
+
+        if (profileErr) {
+          console.error("Profile fetch error:", profileErr);
+        }
+
         if (profileData) {
           setProfile(profileData);
           fetchAuctions(session.user.id, !!(profileData.is_admin && masterViewActive));
+
+          // If admin, fetch all profiles for user filtering
+          if (profileData.is_admin) {
+            const { data } = await supabase.from("profiles").select("id, email").order("email");
+            if (data) setAllProfiles(data);
+          }
         } else {
-          fetchAuctions(session.user.id, false);
+          const { data: fallbackData } = await supabase
+            .from("profiles")
+            .select("*")
+            .eq("email", session.user.email)
+            .maybeSingle();
+          
+          if (fallbackData) {
+              setProfile(fallbackData);
+              fetchAuctions(session.user.id, !!(fallbackData.is_admin && masterViewActive));
+
+              if (fallbackData.is_admin) {
+                const { data } = await supabase.from("profiles").select("id, email").order("email");
+                if (data) setAllProfiles(data);
+              }
+          } else {
+              fetchAuctions(session.user.id, false);
+          }
         }
       }
     };
@@ -592,7 +644,11 @@ export default function Dashboard() {
         (activeTab === "paused" && a.status === "paused") ||
         (activeTab === "ended" && a.status === "expired");
 
-      return matchesSearch && matchesSource && matchesTab;
+      // 4. User Filter (Admin only)
+      const matchesUser =
+        !profile?.is_admin || !masterViewActive || selectedUser === "all" || a.user_id === selectedUser;
+
+      return matchesSearch && matchesSource && matchesTab && matchesUser;
     })
     .sort((a, b) => {
       // Sort by Closing Time: respect sortOrder (asc/desc)
@@ -652,16 +708,37 @@ export default function Dashboard() {
               </div>
             </div>
             {profile?.is_admin && (
-              <button
-                onClick={() => {
-                  const newState = !masterViewActive;
-                  setMasterViewActive(newState);
-                  if (user) fetchAuctions(user.id, newState);
-                }}
-                className={`pill master-toggle-btn ${masterViewActive ? "active" : "ghost"}`}
-              >
-                {masterViewActive ? "Master View: ON" : "Master View: OFF"}
-              </button>
+              <div className="admin-controls">
+                <button
+                  onClick={() => {
+                    const newState = !masterViewActive;
+                    setMasterViewActive(newState);
+                    setSelectedUser("all"); // Reset user filter when toggling master view
+                    if (user) fetchAuctions(user.id, newState);
+                  }}
+                  className={`pill master-toggle-btn ${masterViewActive ? "active" : "ghost"}`}
+                >
+                  <Users size={16} className="master-icon" />
+                  {masterViewActive ? "Master View: ON" : "Enabling Master"}
+                </button>
+                {masterViewActive && allProfiles.length > 0 && (
+                  <div className="user-filter-wrapper">
+                    <select
+                      value={selectedUser}
+                      onChange={(e) => setSelectedUser(e.target.value)}
+                      className="pill glass-select"
+                      title="Filter by User"
+                    >
+                      <option value="all">👥 Filter: All Users</option>
+                      {allProfiles.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          👤 {p.email}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
             )}
             <button
               onClick={() => setSoundEnabled(!soundEnabled)}
@@ -1354,6 +1431,61 @@ export default function Dashboard() {
         .dot.fetching {
           background: #ef4444; /* Red dot */
           box-shadow: 0 0 10px #ef4444;
+        }
+
+        /* Admin Controls Styling */
+        .admin-controls {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          background: rgba(255, 255, 255, 0.4);
+          padding: 4px;
+          border-radius: 100px;
+          border: 1px solid rgba(0, 0, 0, 0.03);
+          backdrop-filter: blur(10px);
+        }
+        .master-toggle-btn {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        .master-toggle-btn.active {
+          background: #3b82f6 !important;
+          box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+        }
+        .master-icon {
+          opacity: 0.8;
+        }
+        .glass-select {
+          background: white !important;
+          border: 1px solid rgba(0, 0, 0, 0.08) !important;
+          padding: 6px 36px 6px 16px !important;
+          height: 38px;
+          font-size: 13px;
+          font-weight: 700;
+          color: var(--text-primary);
+          appearance: none;
+          background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%237c766d' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") !important;
+          background-repeat: no-repeat !important;
+          background-position: right 12px center !important;
+          cursor: pointer;
+          transition: all 0.2s;
+          min-width: 180px;
+        }
+        .glass-select:hover {
+          border-color: var(--accent-blue) !important;
+          transform: translateY(-1px);
+        }
+        .glass-select:focus {
+          border-color: var(--accent-blue) !important;
+          box-shadow: 0 0 0 3px rgba(74, 122, 181, 0.1);
+          outline: none;
+        }
+        .user-filter-wrapper {
+          position: relative;
+          display: flex;
+          align-items: center;
         }
 
         .card-actions {
