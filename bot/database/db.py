@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional
 
@@ -18,17 +19,17 @@ class DatabaseLayer:
     async def fetch_due_items(self, limit: int = 10) -> List[Dict[str, Any]]:
         """
         Retrieves items that are due for a refresh. 
-        Note: True 'FOR UPDATE SKIP LOCKED' requires an RPC call to a PG function.
-        This method simulates it using standard filters.
         """
         now = datetime.now(timezone.utc).isoformat()
-        response = self.supabase.table("auction_items").select("*") \
-            .eq("status", "active") \
-            .lte("next_fetch_at", now) \
-            .or_(f"locked_until.is.null,locked_until.lte.{now}") \
-            .order("next_fetch_at") \
-            .limit(limit) \
-            .execute()
+        response = await asyncio.to_thread(
+            self.supabase.table("auction_items").select("*")
+            .eq("status", "active")
+            .lte("next_fetch_at", now)
+            .or_(f"locked_until.is.null,locked_until.lte.{now}")
+            .order("next_fetch_at")
+            .limit(limit)
+            .execute
+        )
         return response.data
 
     async def get_all_item_statuses(self) -> Dict[str, str]:
@@ -36,14 +37,18 @@ class DatabaseLayer:
         Retrieves status map for all relevant items (id -> status).
         Used for detecting manual Pause/Resume toggles.
         """
-        response = self.supabase.table("auction_items").select("id, status").execute()
+        response = await asyncio.to_thread(
+            self.supabase.table("auction_items").select("id, status").execute
+        )
         return {item['id']: item['status'] for item in response.data}
 
     async def fetch_all_items_minimal(self) -> List[Dict[str, Any]]:
         """
         Fetches id, status, closing_time, and locked_until for all items to check for auto-expirations.
         """
-        response = self.supabase.table("auction_items").select("id, status, closing_time, locked_until").execute()
+        response = await asyncio.to_thread(
+            self.supabase.table("auction_items").select("id, status, closing_time, locked_until").execute
+        )
         return response.data
 
 
@@ -54,9 +59,11 @@ class DatabaseLayer:
         now = datetime.now(timezone.utc)
         lock_until = (now + timedelta(seconds=duration_seconds)).isoformat()
         
-        response = self.supabase.table("auction_items").update({
-            "locked_until": lock_until
-        }).eq("id", item_id).execute()
+        response = await asyncio.to_thread(
+            self.supabase.table("auction_items").update({
+                "locked_until": lock_until
+            }).eq("id", item_id).execute
+        )
         
         return len(response.data) > 0
 
@@ -64,9 +71,11 @@ class DatabaseLayer:
         """
         Deterministic release of the item lock.
         """
-        self.supabase.table("auction_items").update({
-            "locked_until": None
-        }).eq("id", item_id).execute()
+        await asyncio.to_thread(
+            self.supabase.table("auction_items").update({
+                "locked_until": None
+            }).eq("id", item_id).execute
+        )
 
     async def update_item_success(self, item_id: str, scraped_data: Dict[str, Any], session_id: str = None):
         """
@@ -95,7 +104,9 @@ class DatabaseLayer:
 
         # --- CRITICAL: Do not overwrite 'paused' status from user ---
         try:
-            current_db_resp = self.supabase.table("auction_items").select("status").eq("id", item_id).execute()
+            current_db_resp = await asyncio.to_thread(
+                self.supabase.table("auction_items").select("status").eq("id", item_id).execute
+            )
             if current_db_resp.data:
                 db_status = current_db_resp.data[0].get("status")
                 # If user paused it while we were scraping, keep it paused.
@@ -117,7 +128,9 @@ class DatabaseLayer:
             "locked_until": None  # Always release lock
         }
         
-        self.supabase.table("auction_items").update(payload).eq("id", item_id).execute()
+        await asyncio.to_thread(
+            self.supabase.table("auction_items").update(payload).eq("id", item_id).execute
+        )
 
     async def update_item_failure(self, item_id: str, error_message: str):
         """
@@ -126,7 +139,9 @@ class DatabaseLayer:
         now = datetime.now(timezone.utc)
         
         try:
-            current_db_resp = self.supabase.table("auction_items").select("retry_count").eq("id", item_id).execute()
+            current_db_resp = await asyncio.to_thread(
+                self.supabase.table("auction_items").select("retry_count").eq("id", item_id).execute
+            )
             if current_db_resp.data:
                 current_retries = current_db_resp.data[0].get("retry_count") or 0
             else:
@@ -158,7 +173,9 @@ class DatabaseLayer:
             logger.warning(f"[DB] Failure for {item_id[:8]}: {error_message}. Retry {new_retries}/3 in 300s.")
             payload["next_fetch_at"] = next_fetch.isoformat()
         
-        self.supabase.table("auction_items").update(payload).eq("id", item_id).execute()
+        await asyncio.to_thread(
+            self.supabase.table("auction_items").update(payload).eq("id", item_id).execute
+        )
 
     async def cleanup_expired_items(self):
         """
@@ -166,12 +183,13 @@ class DatabaseLayer:
         """
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
         try:
-            # We check closing_time specifically
-            self.supabase.table("auction_items") \
-                .delete() \
-                .eq("status", "expired") \
-                .lt("closing_time", cutoff) \
-                .execute()
+            await asyncio.to_thread(
+                self.supabase.table("auction_items")
+                .delete()
+                .eq("status", "expired")
+                .lt("closing_time", cutoff)
+                .execute
+            )
             logger.info(f"Ran cleanup for expired items older than {cutoff}")
         except Exception as e:
             logger.error(f"Cleanup Error: {e}")

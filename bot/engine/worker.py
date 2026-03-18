@@ -60,8 +60,11 @@ class Worker:
         logger.info(f"[WORKER] {worker_id} -> Item {item_id[:8]} ({site_key}) using session {session_id[:6]}")
 
         try:
-            # 5. Standardized Fetch
-            scraped_data = await adapter.fetch(url, preferred_method=fetch_method)
+            # 5. Standardized Fetch with 3-minute total timeout
+            scraped_data = await asyncio.wait_for(
+                adapter.fetch(url, preferred_method=fetch_method),
+                timeout=180
+            )
             
             if scraped_data:
                 # SUCCESS: Save the data AND the session_id we used

@@ -41,7 +41,7 @@ async def run_monitoring_engine(poll_interval: int = 5):
     scheduler = Scheduler(supabase)
     worker = Worker(db, scheduler)
 
-    last_heartbeat = 0
+    last_heartbeat_log = 0
     last_cleanup = 0
     
     # Simple State Tracker: {item_id: status}
@@ -53,6 +53,7 @@ async def run_monitoring_engine(poll_interval: int = 5):
             
             try:
                 now_utc = datetime.now(timezone.utc)
+                # fetch_all_items_minimal is already threaded now
                 all_items = await db.fetch_all_items_minimal()
                 current_ids = {item['id'] for item in all_items}
                 
@@ -68,7 +69,6 @@ async def run_monitoring_engine(poll_interval: int = 5):
                     prev_status = previous_states.get(item_id)
                     
                     # 2. AUTO-EXPIRATION CHECK (Works even if Paused)
-                    # Only auto-expire if NOT currently locked (fetching)
                     locked_until = item.get('locked_until')
                     is_locked = False
                     if locked_until:
@@ -82,12 +82,13 @@ async def run_monitoring_engine(poll_interval: int = 5):
                             ct = datetime.fromisoformat(closing_time_str.replace("Z", "+00:00"))
                             if ct < now_utc:
                                 logger.info(f"Item {item_id[:8]} has EXPIRED based on clock. Updating status.")
-                                supabase.table("auction_items").update({"status": "expired"}).eq("id", item_id).execute()
+                                # Use threaded update
+                                await asyncio.to_thread(
+                                    supabase.table("auction_items").update({"status": "expired"}).eq("id", item_id).execute
+                                )
                                 current_status = 'expired'
                         except: pass
-                    elif is_locked and current_status != 'expired':
-                        logger.debug(f"Item {item_id[:8]} is LOCKED. Skipping auto-expiration check.")
-
+                    
                     # 3. STATUS CHANGED (or NEW ITEM)
                     if prev_status != current_status:
                         if prev_status is not None:
@@ -97,47 +98,51 @@ async def run_monitoring_engine(poll_interval: int = 5):
                         
                         # If user toggled to active OR it's a new active item, force fetch
                         if current_status == 'active':
-                            supabase.table("auction_items").update({
-                                "next_fetch_at": now_utc.isoformat(),
-                                "locked_until": None
-                            }).eq("id", item_id).execute()
+                            await asyncio.to_thread(
+                                supabase.table("auction_items").update({
+                                    "next_fetch_at": now_utc.isoformat(),
+                                    "locked_until": None
+                                }).eq("id", item_id).execute
+                            )
                     
                     previous_states[item_id] = current_status
             except Exception as e:
-                # ConnectionTerminated or Postgrest errors shouldn't crash the engine
                 if "ConnectionTerminated" in str(e) or "SSL" in str(e):
                     logger.warning(f"Database connection hiccup in State Tracker: {e}. Retrying in 5s...")
                 else:
                     logger.error(f"State Tracker Error: {e}")
                 await asyncio.sleep(5)
-            # -----------------------------
 
             # 1. Periodic Cleanup (Every 1 hour)
             if now_ts - last_cleanup > 3600:
                 await db.cleanup_expired_items()
                 last_cleanup = now_ts
 
-            # 2. Adaptive Polling: Check what's due
+            # 2. Adaptive Polling: Check what's due (already threaded in db.py)
             due_items = await db.fetch_due_items(limit=10)
 
             if not due_items:
-                # Log heartbeat summary every 1 minute for snappier feedback
-                if now_ts - last_heartbeat > 60:
-                    logger.debug("System Heartbeat: Engine Healthy.")
-                    last_heartbeat = now_ts
+                # Log heartbeat info every 10 minutes to show engine is spinning
+                if now_ts - last_heartbeat_log > 600:
+                    logger.info("System Heartbeat: Engine Spinning (No items due).")
+                    last_heartbeat_log = now_ts
                 
-                await asyncio.sleep(1) 
+                await asyncio.sleep(2) 
                 continue
 
-            # Reset heartbeat timer when activity starts
-            last_heartbeat = now_ts
+            # Reset heartbeat log timer if we're actually processing
+            last_heartbeat_log = now_ts
             logger.info(f"Detected {len(due_items)} items due for refresh. Processing batch...")
 
-            # 3. Process batch
+            # 3. Process batch with total batch timeout protection
             tasks = [worker.process_item(item, f"worker-{i}") for i, item in enumerate(due_items)]
-            await asyncio.gather(*tasks)
+            try:
+                # Allow 5 minutes total for a batch of 10 items (generous)
+                await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=300)
+            except asyncio.TimeoutError:
+                logger.error("Engine Block: Batch processing timed out after 5 minutes! Forcing next loop.")
 
-            await asyncio.sleep(2)
+            await asyncio.sleep(1)
 
         except Exception as e:
             logger.error(f"Engine Loop Error: {e}")
