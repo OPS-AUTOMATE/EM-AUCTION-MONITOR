@@ -71,7 +71,7 @@ class AllSurplusAdapter(BaseAuctionAdapter):
                     "item_name": item_name,
                     "current_bid": current_bid,
                     "closing_time": closing_time_iso,
-                    "location": "See Website",
+                    "city": "See Website",
                     "url": url,
                     "site_key": "allsurplus"
                 }

@@ -119,7 +119,7 @@ async def run_monitoring_engine(poll_interval: int = 5):
                 last_cleanup = now_ts
 
             # 2. Adaptive Polling: Check what's due (already threaded in db.py)
-            due_items = await db.fetch_due_items(limit=10)
+            due_items = await db.fetch_due_items(limit=5)
 
             if not due_items:
                 # Log heartbeat info every 10 minutes to show engine is spinning
