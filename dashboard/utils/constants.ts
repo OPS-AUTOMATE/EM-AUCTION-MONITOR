@@ -3,7 +3,7 @@ export const PREMIUM_MAP: Record<string, number> = {
   "centurionservice.com": 19.00,
   "britishmedicalauctions.com": 20.00,
   "globalmedauctions.com": 19.00,
-  "bidspotter.com": 20.00,
+  "bidspotter.com": 15.00,
   "dotmed.com": 18.00,
   "mazree.com": 18.00,
   "govplanet.com": 18.00,

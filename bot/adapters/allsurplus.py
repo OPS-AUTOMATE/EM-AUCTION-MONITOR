@@ -44,15 +44,15 @@ class AllSurplusAdapter(BaseAuctionAdapter):
                         if parent:
                             price_text = await parent.inner_text()
 
-                current_price = 0.0
+                current_bid = 0.0
                 if price_text:
                     price_match = re.search(r"([\d,]+\.?\d*)", price_text.replace(",", ""))
                     if price_match:
-                        current_price = float(price_match.group(1))
+                        current_bid = float(price_match.group(1))
 
                 # Extract Closing Time
                 # Format: "3h41m(Mar 18, 2026 07:00 PM EDT)"
-                closing_date = None
+                closing_time_iso = None
                 time_elem = await page.query_selector(".time-left, .asset-ends")
                 if time_elem:
                     time_text = await time_elem.inner_text()
@@ -62,14 +62,15 @@ class AllSurplusAdapter(BaseAuctionAdapter):
                         try:
                             # Mar 18, 2026 07:00 PM EDT
                             clean_date_str = re.sub(r"\s[A-Z]{3}$", "", date_str)
-                            closing_date = datetime.strptime(clean_date_str, "%b %d, %Y %I:%M %p")
+                            dt = datetime.strptime(clean_date_str, "%b %d, %Y %I:%M %p")
+                            closing_time_iso = dt.isoformat()
                         except Exception as e:
                             logger.error(f"Error parsing date {date_str}: {e}")
 
                 return {
                     "item_name": item_name,
-                    "current_price": current_price,
-                    "closing_date": closing_date,
+                    "current_bid": current_bid,
+                    "closing_time": closing_time_iso,
                     "location": "See Website",
                     "url": url,
                     "site_key": "allsurplus"

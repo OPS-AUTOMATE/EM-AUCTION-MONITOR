@@ -53,6 +53,7 @@ interface Auction {
   owner?: {
     email: string;
   };
+  created_at: string;
 }
 
 interface ExtendedWindow extends Window {
@@ -1014,6 +1015,21 @@ export default function Dashboard() {
                         Owner: {auction.owner.email}
                       </div>
                     )}
+                    <div className="flex items-center gap-2">
+                      <h2 className="item-title line-clamp-1 flex-1">
+                        {auction.item_name || "Processing URL..."}
+                      </h2>
+                      {(() => {
+                        const createdDate = new Date(auction.created_at);
+                        const now = new Date();
+                        const diffInMinutes = (now.getTime() - createdDate.getTime()) / (1000 * 60);
+                        return diffInMinutes <= 15 ? (
+                          <span className="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800 animate-pulse">
+                            New
+                          </span>
+                        ) : null;
+                      })()}
+                    </div>
                     <div className="meta-strip">
                       <div className="meta-pill">
                         <MapPin size={12} />

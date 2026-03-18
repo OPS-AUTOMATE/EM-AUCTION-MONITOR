@@ -136,49 +136,49 @@ class GovPlanetAdapter(BaseAuctionAdapter):
                 if time_text:
                     try:
                         from dateutil import parser as date_parser
-                        # GovPlanet format is often "Mar 10, 12:09 PM - 12:10 PM PDT"
-                        # We take the start time part (before the dash)
-                        time_to_parse = time_text.split("-")[0].strip()
                         
-                        # Handle potential timezone at the end of the full string
-                        timezone_match = re.search(r'\b([A-Z]{3,4})\b$', time_text.strip())
-                        timezone_suffix = f" {timezone_match.group(1)}" if timezone_match else ""
-                        
-                        full_parse_str = f"{time_to_parse}{timezone_suffix}"
-                        
-                        # Define common US timezones for dateutil
-                        tzinfos = {
-                            "PDT": -7 * 3600, "PST": -8 * 3600,
-                            "EDT": -4 * 3600, "EST": -5 * 3600,
-                            "CDT": -5 * 3600, "CST": -6 * 3600,
-                            "MDT": -6 * 3600, "MST": -7 * 3600,
-                        }
-                        
-                        dt = date_parser.parse(full_parse_str, tzinfos=tzinfos)
-                        
-                        # Ensure year is reasonable (parser might default to current year if missing)
-                        now = datetime.now(timezone.utc)
-                        
-                        # If dt is naive (no timezone in string), assume UTC for comparison
-                        compare_dt = dt
-                        if compare_dt.tzinfo is None:
-                            compare_dt = compare_dt.replace(tzinfo=timezone.utc)
+                        # Handle "time TBD" explicitly
+                        if "TBD" in time_text.upper():
+                            logger.info(f"[GovPlanet] Time is TBD for: {time_text}")
+                            # Keep closing_time_iso as None
+                        else:
+                            # GovPlanet format is often "Mar 10, 12:09 PM - 12:10 PM PDT"
+                            # We take the start time part (before the dash)
+                            time_parts = time_text.split("-")
+                            time_to_parse = time_parts[0].strip()
+                            
+                            # Handle potential timezone at the end of the full string
+                            timezone_match = re.search(r'\b([A-Z]{3,4})\b$', time_text.strip())
+                            timezone_suffix = f" {timezone_match.group(1)}" if timezone_match else ""
+                            
+                            full_parse_str = f"{time_to_parse}{timezone_suffix}"
+                            
+                            # Define common US timezones for dateutil
+                            tzinfos = {
+                                "PDT": -7 * 3600, "PST": -8 * 3600,
+                                "EDT": -4 * 3600, "EST": -5 * 3600,
+                                "CDT": -5 * 3600, "CST": -6 * 3600,
+                                "MDT": -6 * 3600, "MST": -7 * 3600,
+                            }
+                            
+                            dt = date_parser.parse(full_parse_str, tzinfos=tzinfos)
+                            
+                            # Ensure year is reasonable
+                            now_utc = datetime.now(timezone.utc)
+                            
+                            if dt.tzinfo is None:
+                                dt = dt.replace(tzinfo=timezone.utc)
 
-                        if dt.year < 2000:
-                            dt = dt.replace(year=now.year)
-                        
-                        # Re-calculate compare_dt with new year if it changed
-                        if compare_dt.year < 2000:
-                            compare_dt = compare_dt.replace(year=now.year)
-
-                        # If date has passed significantly (e.g. Dec item but it is currently Jan), it might be next year
-                        if compare_dt < now - timedelta(days=60):
-                             dt = dt.replace(year=now.year + 1)
-                             
-                        closing_time_iso = dt.isoformat()
+                            if dt.year < 2000:
+                                dt = dt.replace(year=now_utc.year)
+                            
+                            # If date has passed significantly, it might be next year
+                            if dt < now_utc - timedelta(days=60):
+                                 dt = dt.replace(year=now_utc.year + 1)
+                                 
+                            closing_time_iso = dt.isoformat()
                     except Exception as e:
                         logger.warning(f"[GovPlanet] Date parsing failed for '{time_text}': {e}")
-                        # Fallback to simple regex if dateutil fails
                         pass
 
                 return {

@@ -43,19 +43,19 @@ class EquipNetAdapter(BaseAuctionAdapter):
                 if not price_text and price_elem:
                     price_text = await price_elem.inner_text()
 
-                current_price = 0.0
+                current_bid = 0.0
                 if price_text:
                     price_match = re.search(r"([\d,]+\.?\d*)", price_text.replace(",", ""))
                     if price_match:
-                        current_price = float(price_match.group(1))
+                        current_bid = float(price_match.group(1))
 
-                closing_date = None
+                closing_time = None
 
                 return {
                     "item_name": item_name,
-                    "current_price": current_price,
-                    "closing_date": closing_date,
-                    "location": "See Website",
+                    "current_bid": current_bid,
+                    "closing_time": closing_time,
+                    "city": "See Website",
                     "url": url,
                     "site_key": "equipnet"
                 }
