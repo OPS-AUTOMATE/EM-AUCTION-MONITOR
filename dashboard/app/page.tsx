@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { createClient } from "@/utils/supabase-browser";
 import { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 import { useRouter } from "next/navigation";
-import { getInitialPremium, getSiteKey } from "@/utils/constants";
+import { getInitialPremium, getSiteKey, SUPPORTED_DOMAINS } from "@/utils/constants";
 import {
   Plus,
   Search,
@@ -416,6 +416,24 @@ export default function Dashboard() {
   const handleAddItem = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newUrl || !user) return;
+
+    // URL Validation
+    let hostname = "";
+    try {
+      hostname = new URL(newUrl).hostname.toLowerCase();
+    } catch {
+      alert("Please enter a valid URL (including https://)");
+      return;
+    }
+
+    const isSupported = SUPPORTED_DOMAINS.some(domain => 
+      hostname === domain.toLowerCase() || hostname.endsWith("." + domain.toLowerCase())
+    );
+
+    if (!isSupported) {
+      alert("No adapter implemented for this website yet. Contact developers team.");
+      return;
+    }
 
     // Duplicate Prevention Check
     const isDuplicate = auctions.some(

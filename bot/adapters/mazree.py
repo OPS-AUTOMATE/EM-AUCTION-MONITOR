@@ -10,7 +10,10 @@ import os
 
 logger = logging.getLogger(__name__)
 
-storage_path = "mazree_session.json"
+# SESSION PERSISTENCE
+SESSION_DIR = os.path.join(os.path.dirname(__file__), "..", ".sessions")
+os.makedirs(SESSION_DIR, exist_ok=True)
+storage_path = os.path.join(SESSION_DIR, "mazree_session.json")
 
 class MazreeAdapter(BaseAuctionAdapter):
     """

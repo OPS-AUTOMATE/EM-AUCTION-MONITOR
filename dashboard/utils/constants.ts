@@ -13,8 +13,12 @@ export const PREMIUM_MAP: Record<string, number> = {
   "greenpulse.health": 18.00,
   "troostwijkauctions.com": 0.00,
   "publicsurplus.com": 10.00,
-  "purplewave.com": 10.00
+  "purplewave.com": 10.00,
+  "allsurplus.com": 12.50,
+  "equipnet.com": 15.00
 }
+
+export const SUPPORTED_DOMAINS = Object.keys(PREMIUM_MAP);
 
 export function getInitialPremium(url: string): number {
   let hostname = "";
@@ -58,5 +62,7 @@ export function getSiteKey(url: string): string {
   if (hostname === "publicsurplus.com" || hostname.endsWith(".publicsurplus.com")) return "publicsurplus";
   if (hostname === "troostwijkauctions.com" || hostname.endsWith(".troostwijkauctions.com")) return "troostwijk";
   if (hostname === "greenpulse.health" || hostname.endsWith(".greenpulse.health")) return "greenpulse";
+  if (hostname === "allsurplus.com" || hostname.endsWith(".allsurplus.com")) return "allsurplus";
+  if (hostname === "equipnet.com" || hostname.endsWith(".equipnet.com")) return "equipnet";
   return "mock"; // Default fallback
 }

@@ -16,6 +16,8 @@ from .gcsurplus import GCSurplusAdapter
 from .publicsurplus import PublicSurplusAdapter
 from .troostwijk import TroostwijkAdapter
 from .greenpulse import GreenPulseAdapter
+from .allsurplus import AllSurplusAdapter
+from .equipnet import EquipNetAdapter
 
 # Strict Adapter Registry
 # Every site key maps to its dedicated production-grade driver.
@@ -35,6 +37,8 @@ ADAPTER_MAP: Dict[str, Type[BaseAuctionAdapter]] = {
     "publicsurplus": PublicSurplusAdapter,
     "troostwijk": TroostwijkAdapter,
     "greenpulse": GreenPulseAdapter,
+    "allsurplus": AllSurplusAdapter,
+    "equipnet": EquipNetAdapter,
 }
 
 def detect_site_key(url: str) -> str:
@@ -84,6 +88,10 @@ def detect_site_key(url: str) -> str:
         return "troostwijk"
     if host == "greenpulse.health" or host.endswith(".greenpulse.health"):
         return "greenpulse"
+    if host == "allsurplus.com" or host.endswith(".allsurplus.com"):
+        return "allsurplus"
+    if host == "equipnet.com" or host.endswith(".equipnet.com"):
+        return "equipnet"
     return "mock"
 
 def get_adapter(site_key: str) -> Optional[Type[BaseAuctionAdapter]]:
