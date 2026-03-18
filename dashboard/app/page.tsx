@@ -311,8 +311,10 @@ export default function Dashboard() {
     if (status === "expired") return "Ended";
 
     if (!closingTime) {
-      // If we only have a static string, clean it up
-      if (!staticStr) return "Syncing...";
+      // If we only have a static string (like "Starting Sync..." or scraped text), clean it up
+      if (!staticStr || staticStr === "Starting Sync...") {
+        return status === "active" ? "Live" : "Syncing...";
+      }
       // Standardize common formats like "3 Days : 17 Hours" to "3d 17h"
       return staticStr
         .replace(/Days?/gi, "d")
@@ -1006,19 +1008,16 @@ export default function Dashboard() {
                     </div>
                   </div>
 
-                  <div className="card-center">
-                    <h2 className="item-title">
-                      {auction.item_name || "Processing URL..."}
-                    </h2>
-                    {profile?.is_admin && auction.owner?.email && (
-                      <div className="owner-tag">
-                        Owner: {auction.owner.email}
-                      </div>
-                    )}
-                    <div className="flex items-center gap-2">
-                      <h2 className="item-title line-clamp-1 flex-1">
-                        {auction.item_name || "Processing URL..."}
-                      </h2>
+                    <div className="card-center">
+                      {profile?.is_admin && auction.owner?.email && (
+                        <div className="owner-tag">
+                          Owner: {auction.owner.email}
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2">
+                        <h2 className="item-title line-clamp-1 flex-1">
+                          {auction.item_name || "Processing URL..."}
+                        </h2>
                       {(() => {
                         const createdDate = new Date(auction.created_at);
                         const now = new Date();

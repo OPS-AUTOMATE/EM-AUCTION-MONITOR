@@ -43,6 +43,15 @@ class EquipNetAdapter(BaseAuctionAdapter):
                 if not price_text and price_elem:
                     price_text = await price_elem.inner_text()
 
+                # Robust fallback for marketplace prices (e.g. h3 containing € or $)
+                if not price_text:
+                    h_elems = await page.query_selector_all("h2, h3")
+                    for h in h_elems:
+                        text = await h.inner_text()
+                        if any(c in text for c in ["€", "$", "£", "EUR", "USD", "GBP"]):
+                            price_text = text
+                            break
+
                 current_bid = 0.0
                 if price_text:
                     price_match = re.search(r"([\d,]+\.?\d*)", price_text.replace(",", ""))
