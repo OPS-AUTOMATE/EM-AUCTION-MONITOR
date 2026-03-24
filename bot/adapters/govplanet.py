@@ -79,46 +79,49 @@ class GovPlanetAdapter(BaseAuctionAdapter):
                 item_name = await get_text_safe('h1.itemdesc, h1')
 
                 # 2. Location
-                # Inspected pattern: div with text 'LOCATION' followed by value div
-                location = await get_text_safe('xpath=//div[contains(text(), "LOCATION")]/following-sibling::div')
+                # Live items have "Location" label, Sold items have "LOCATION"
+                location = await get_text_safe('xpath=//*[contains(translate(text(), "LOCATION", "location"), "location")]/following-sibling::*[1]')
                 if not location:
-                    location = await get_text_safe('xpath=//*[contains(text(), "Location")]/following-sibling::*')
+                    # Try targeting the parent container
+                    location = await get_text_safe('xpath=//div[contains(text(), "Location")]/following-sibling::div')
                 if not location:
-                    location = await get_text_safe(".location, .item-location, .item-stats div:nth-child(2)")
+                    location = await get_text_safe(".location, .item-location, .item-stats div:nth-child(2), [itemprop='availableAtOrFrom']")
 
                 # 3. No. of Bids
-                bids_selector = f'[id="IP${item_id}_bidcountItemstring"]' if item_id else '[id*="_bidcountItemstring"]'
-                bids_text = await get_text_safe(bids_selector)
+                bids_text = None
+                # Check for "11 bids" or "97" pattern anywhere on page
+                bids_count_el = await page.query_selector('xpath=//*[contains(text(), " bids") or contains(text(), " Bids")]')
+                if bids_count_el:
+                    bids_text = await bids_count_el.inner_text()
+                
                 if not bids_text:
-                    # Inspected pattern: div with text '# OF BIDS' followed by value div
-                    bids_text = await get_text_safe('xpath=//div[contains(text(), "# OF BIDS")]/following-sibling::div')
+                    bids_text = await get_text_safe('xpath=//*[contains(translate(text(), "BIDS", "bids"), "bids")]/following-sibling::*[1]')
+                
                 if not bids_text:
-                    bids_text = await get_text_safe("text=# of Bids")
+                    bids_selector = f'[id="IP${item_id}_bidcountItemstring"]' if item_id else '[id*="_bidcountItemstring"]'
+                    bids_text = await get_text_safe(bids_selector)
 
                 # 4. Auction Date/Time
                 time_text = await get_text_safe(f'[id="IP${item_id}_timeBox"]' if item_id else '[id*="_timeBox"]')
 
                 # 5. Price
-                price_selector = f'[id="IP${item_id}_price"]' if item_id else '[id*="_price"], .current-bid, .price, .winning-bid'
-                price_text = await get_text_safe(price_selector)
+                # Live items use "Highest bid", Sold items use "Winning Bid"
+                price_text = await get_text_safe('xpath=//div[contains(translate(normalize-space(), "BID", "bid"), "bid")]/following-sibling::div[1]')
                 if not price_text:
-                    # Try finding "Winning Bid" or "Current Bid" labels
-                    price_text = await get_text_safe('xpath=//div[contains(text(), "WINNING BID")]/following-sibling::div')
-                if not price_text:
-                    price_text = await get_text_safe("text=Winning Bid") or await get_text_safe("text=Current Bid")
+                    price_selector = f'[id="IP${item_id}_price"]' if item_id else '[id*="_price"], .current-bid, .price, .winning-bid'
+                    price_text = await get_text_safe(price_selector)
 
                 current_bid = 0.0
                 if price_text:
-                    # Remove labels if they were captured
-                    clean_price = re.sub(r'(Winning|Current)\s*Bid:?', '', price_text, flags=re.I)
-                    clean_price = re.sub(r'[^\d.]', '', clean_price.replace(",", ""))
+                    # Remove labels if they were captured (e.g. "US $305")
+                    clean_price = re.sub(r'[^\d.]', '', price_text.replace(",", ""))
                     if clean_price:
                         current_bid = float(clean_price)
 
                 # Location Parsing
                 city, state = "Unknown", "Unknown"
                 if location:
-                    # Example: "North Las Vegas, Nevada, United States. 89030"
+                    # Clean "United States" and zip codes
                     clean_loc = re.sub(r'United States.*$', '', location, flags=re.I).strip()
                     clean_loc = clean_loc.rstrip(',. ')
                     parts = [p.strip() for p in clean_loc.split(',')]
@@ -172,6 +175,7 @@ class GovPlanetAdapter(BaseAuctionAdapter):
                     "website_name": "GovPlanet",
                     "status": status
                 }
+
 
 
 

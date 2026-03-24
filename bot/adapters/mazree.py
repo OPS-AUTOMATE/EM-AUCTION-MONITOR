@@ -63,7 +63,22 @@ class MazreeAdapter(BaseAuctionAdapter):
                     logger.info("[Mazree] Attempting login flow...")
                     await page.goto("https://www.mazree.com/SignIn", wait_until="commit")
                     await page.fill("#email", email)
-                    await page.click('button:has-text("Next")')
+                    
+                    # Trigger validation
+                    await page.click("#email")
+                    await page.press("#email", "Tab")
+                    
+                    # Wait for account check API to enable button
+                    next_btn = page.locator('button:has-text("Next")')
+                    await next_btn.wait_for(state="visible", timeout=10000)
+                    
+                    # Wait for button to be enabled (important for Mazree async account check)
+                    try:
+                        await page.wait_for_selector('button:has-text("Next"):not([disabled])', timeout=10000)
+                    except:
+                        logger.warning("[Mazree] Next button still disabled after timeout, forcing click...")
+
+                    await next_btn.click()
                     
                     pw_field = page.locator('input[type="password"]')
                     await pw_field.wait_for(state="visible", timeout=15000)
@@ -94,27 +109,48 @@ class MazreeAdapter(BaseAuctionAdapter):
                         return (await loc.inner_text()).strip() if await loc.count() > 0 else ""
                     except: return ""
 
-                # Item Name (H3 with specific class)
-                item_name = await get_text("h3.text-4xl") or await get_text("h3") or "Unknown Item"
+                # Item Name
+                item_name = await get_text("h3.text-4xl") or await get_text("h3") or await get_text("h1") or "Unknown Item"
                 
-                # Bid Extraction
+                # Bid/Price Extraction
                 price_text = ""
-                h3s = await page.locator("h3").all()
-                for h3 in h3s:
-                    text = await h3.inner_text()
-                    if "$" in text:
-                        price_text = text
-                        break
+                price_el = await page.query_selector('xpath=//div[contains(text(), "Price") or contains(text(), "Bid")]/following-sibling::div')
+                if price_el:
+                    price_text = await price_el.inner_text()
+                else:
+                    h3s = await page.locator("h3").all()
+                    for h3 in h3s:
+                        text = await h3.inner_text()
+                        if "$" in text:
+                            price_text = text
+                            break
+                
                 current_bid = float(re.sub(r'[^\d.]', '', price_text)) if price_text and re.sub(r'[^\d.]', '', price_text) else 0.0
+
+                # Bidders Count
+                total_bidders = 0
+                bids_el = await page.query_selector('xpath=//span[contains(text(), "BID")]')
+                if bids_el:
+                    bids_text = await bids_el.inner_text()
+                    if match := re.search(r'(\d+)', bids_text):
+                        total_bidders = int(match.group(1))
 
                 # Location (City, State)
                 city, state = "Unknown", "Unknown"
-                pick_from = page.locator("span:has-text('Pick From') + span")
+                pick_from = page.locator("span:has-text('Pick From') + span, div:has-text('Pick From') + div")
                 if await pick_from.count() > 0:
                     raw_loc = await pick_from.first.inner_text()
-                    match = re.search(r"([^,]+),\s*([^,]+?)(?:,\s*|$)", raw_loc)
+                    match = re.search(r"([^,]+),\s*([A-Z]{2}|[a-zA-Z]+)", raw_loc)
                     if match:
                         city, state = match.group(1).strip(), match.group(2).strip()
+                
+                if city == "Unknown":
+                    loc_el = await page.query_selector('xpath=//div[contains(text(), "Pick From")]/following-sibling::div')
+                    if loc_el:
+                        raw_loc = await loc_el.inner_text()
+                        match = re.search(r"([^,]+),\s*([A-Z]{2}|[a-zA-Z]+)", raw_loc)
+                        if match:
+                            city, state = match.group(1).strip(), match.group(2).strip()
 
                 # Status & Time
                 status = "active"
@@ -122,7 +158,7 @@ class MazreeAdapter(BaseAuctionAdapter):
                 closing_time_iso = None
                 
                 page_content_lower = (await page.content()).lower()
-                if any(x in page_content_lower for x in ["closed", "sold", "ended"]):
+                if re.search(r'\b(closed|sold|ended|expired)\b', page_content_lower):
                     status = "expired"
 
                 elif time_str:
@@ -138,11 +174,13 @@ class MazreeAdapter(BaseAuctionAdapter):
                     "current_bid": current_bid,
                     "city": city,
                     "state": state,
+                    "total_bidders": total_bidders,
                     "closing_time": closing_time_iso,
                     "time_remaining_str": time_str or "Syncing...",
                     "website_name": "Mazree",
                     "status": status
                 }
+
 
             except (PlaywrightError, asyncio.TimeoutError) as e:
                 logger.error("[Mazree] Fetch failure: %s", e)
