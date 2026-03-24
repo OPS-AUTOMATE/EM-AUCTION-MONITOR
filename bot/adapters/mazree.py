@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, cast
 
 from playwright.async_api import async_playwright, Error as PlaywrightError
+from playwright_stealth import Stealth
 from utils.browser import launch_browser
 
 from .base_adapter import BaseAuctionAdapter
@@ -46,6 +47,9 @@ class MazreeAdapter(BaseAuctionAdapter):
 
             context = await browser.new_context(**context_args)
             page = await context.new_page()
+            
+            # Apply Stealth for bypass
+            await Stealth().apply_stealth_async(page)
 
             # Optimization: Block heavy media
             await page.route("**/*", lambda route: route.abort() 

@@ -9,6 +9,7 @@ services:
       - "./bot/.env"
     volumes:
       - "./bot/proxies.txt:/app/proxies.txt"
+      - "./bot/.sessions:/app/.sessions"
     shm_size: "1gb"
     deploy:
       resources:
