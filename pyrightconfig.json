@@ -1,0 +1,19 @@
+{
+    "venvPath": ".",
+    "venv": "venv",
+    "include": [
+        "bot"
+    ],
+    "exclude": [
+        "**/__pycache__",
+        "venv"
+    ],
+    "executionEnvironments": [
+        {
+            "root": "bot",
+            "extraPaths": [
+                "."
+            ]
+        }
+    ]
+}
