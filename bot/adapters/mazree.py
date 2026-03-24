@@ -53,43 +53,68 @@ class MazreeAdapter(BaseAuctionAdapter):
                 else route.continue_())
 
             async def perform_login():
-                email = os.getenv("MAZREE_EMAIL")
-                pw = os.getenv("MAZREE_PASSWORD")
+                email = os.getenv("MAZREE_EMAIL", "").strip()
+                pw = os.getenv("MAZREE_PASSWORD", "").strip()
+                
                 if not email or not pw:
-                    logger.warning("[Mazree] Missing credentials for login.")
+                    logger.error("[Mazree] Missing credentials for login.")
                     return False
                 
                 try:
-                    logger.info("[Mazree] Attempting login flow...")
-                    await page.goto("https://www.mazree.com/SignIn", wait_until="commit")
-                    await page.fill("#email", email)
+                    logger.info("[Mazree] Attempting login flow with: %s", email)
+                    await page.goto("https://www.mazree.com/SignIn", wait_until="networkidle")
                     
-                    # Trigger validation
-                    await page.click("#email")
-                    await page.press("#email", "Tab")
+                    email_field = page.locator("#email")
+                    await email_field.wait_for(state="visible", timeout=15000)
                     
-                    # Wait for account check API to enable button
-                    next_btn = page.locator('button:has-text("Next")')
+                    # Human-like typing
+                    await email_field.click()
+                    await email_field.clear()
+                    await email_field.type(email, delay=100)
+                    
+                    # Trigger validation by tabbing or blurring
+                    await email_field.press("Tab")
+                    await asyncio.sleep(2)
+                    
+                    next_btn = page.locator('button:has-text("Next"), button[label="Next"]')
                     await next_btn.wait_for(state="visible", timeout=10000)
-                    
-                    # Wait for button to be enabled (important for Mazree async account check)
-                    try:
-                        await page.wait_for_selector('button:has-text("Next"):not([disabled])', timeout=10000)
-                    except:
-                        logger.warning("[Mazree] Next button still disabled after timeout, forcing click...")
 
-                    await next_btn.click()
+                    # Check if disabled and try to force if needed
+                    is_disabled = await next_btn.get_attribute("disabled") is not None
+                    if is_disabled:
+                        logger.warning("[Mazree] Next button disabled after typing, attempting Enter key press...")
+                        await email_field.focus()
+                        await page.keyboard.press("Enter")
+                    else:
+                        await next_btn.click()
                     
-                    pw_field = page.locator('input[type="password"]')
-                    await pw_field.wait_for(state="visible", timeout=15000)
-                    await pw_field.fill(pw)
-                    await pw_field.press("Enter")
-                    
+                    # Wait for password field
+                    try:
+                        pw_field = page.locator('input[type="password"]')
+                        await pw_field.wait_for(state="visible", timeout=15000)
+                        logger.info("[Mazree] Email accepted, entering password...")
+                        await pw_field.fill(pw)
+                        await pw_field.press("Enter")
+                    except (PlaywrightError, Exception):
+                        # Maybe we are already on password page or it failed
+                        if await page.locator("text=Incorrect email or password").count() > 0:
+                            logger.error("[Mazree] Login validation failed (email likely invalid)")
+                            return False
+                        # Try one more click on next if still on email page
+                        if await next_btn.is_visible():
+                            await next_btn.click(force=True)
+                            await asyncio.sleep(2)
+                            pw_field = page.locator('input[type="password"]')
+                            if await pw_field.count() > 0:
+                                await pw_field.fill(pw)
+                                await pw_field.press("Enter")
+
                     await page.wait_for_selector('button:has-text("Sign Out"), .app-container', timeout=20000)
                     await context.storage_state(path=STORAGE_PATH)
+                    logger.info("[Mazree] Login successful.")
                     return True
                 except (PlaywrightError, Exception) as e:
-                    logger.error("[Mazree] Login failed: %s", e)
+                    logger.error("[Mazree] Login failed during flow: %s", e)
                 return False
 
             try:
@@ -97,12 +122,14 @@ class MazreeAdapter(BaseAuctionAdapter):
                 await page.goto(url, wait_until="commit", timeout=60000)
                 await asyncio.sleep(5) # Wait for Angular hydration
 
-                if "/SignIn" in page.url or await page.locator("#email").count() > 0:
+                # Check if we need to log in
+                is_logged_in = await page.locator('button:has-text("Sign Out")').count() > 0
+                if not is_logged_in and ("/SignIn" in page.url or await page.locator("#email").count() > 0):
                     if await perform_login():
                         await page.goto(url, wait_until="commit")
                         await asyncio.sleep(5)
 
-                # Extraction logic
+                # Extraction logic (rest of the code)
                 async def get_text(sel: str) -> str:
                     try:
                         loc = page.locator(sel).first
@@ -180,6 +207,7 @@ class MazreeAdapter(BaseAuctionAdapter):
                     "website_name": "Mazree",
                     "status": status
                 }
+
 
 
             except (PlaywrightError, asyncio.TimeoutError) as e:
