@@ -126,20 +126,40 @@ class MazreeAdapter(BaseAuctionAdapter):
                         await page.goto(url, wait_until="commit")
                         await asyncio.sleep(5)
 
-                # Extraction logic (rest of the code)
+                # Extraction logic
                 async def get_text(sel: str) -> str:
                     try:
                         loc = page.locator(sel).first
                         return (await loc.inner_text()).strip() if await loc.count() > 0 else ""
                     except: return ""
 
-                # Item Name extraction
-                raw_name = await get_text("h3.text-4xl") or await get_text("h3") or await get_text("h1")
-                extracted_item_name = str(raw_name) if raw_name else "Unknown Item"
+                # Wait for the item title to be visible and not be the login title
+                # This prevents "Login to Mazree" from being scraped during transitions
+                max_retries = 2
+                extracted_item_name = "Unknown Item"
+                
+                for attempt in range(max_retries):
+                    # Try to wait for the actual item header
+                    try:
+                        await page.wait_for_selector("h3.text-4xl, h3, h1", timeout=10000)
+                    except:
+                        pass
+                        
+                    raw_name = await get_text("h3.text-4xl") or await get_text("h3") or await get_text("h1")
+                    extracted_item_name = f"{raw_name or 'Unknown Item'}"
+                    
+                    if "Login to Mazree" not in extracted_item_name and extracted_item_name != "Unknown Item":
+                        break
+                    
+                    if attempt < max_retries - 1:
+                        logger.info(f"[Mazree] Caught login page title '{extracted_item_name}', retrying navigation to item page...")
+                        await page.goto(url, wait_until="networkidle")
+                        await asyncio.sleep(3)
                 
                 # Bid/Price Extraction
                 price_text = ""
-                price_el = await page.query_selector('xpath=//div[contains(text(), "Price") or contains(text(), "Bid")]/following-sibling::div')
+                # Added 'Winning' and 'Final' to support concluded auctions
+                price_el = await page.query_selector('xpath=//div[contains(text(), "Price") or contains(text(), "Bid") or contains(text(), "Winning") or contains(text(), "Final")]/following-sibling::div')
                 if price_el:
                     price_text = await price_el.inner_text()
                 else:
@@ -183,7 +203,7 @@ class MazreeAdapter(BaseAuctionAdapter):
                 closing_time_iso = None
                 
                 page_content_lower = (await page.content()).lower()
-                if re.search(r'\b(closed|sold|ended|expired)\b', page_content_lower):
+                if re.search(r'\b(closed|sold|ended|expired|winning)\b', page_content_lower):
                     status = "expired"
 
                 elif time_str:
