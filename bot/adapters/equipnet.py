@@ -99,14 +99,11 @@ class EquipNetAdapter(BaseAuctionAdapter):
                     price_text = await price_elem.inner_text()
                 
                 # Fallback to general price selectors
+                # Extra Price Selectors
                 if not price_text:
-                    price_elem = await page.query_selector(".price-box, .product-price, .listing-price")
-                    if not price_elem:
-                        price_elem = await page.query_selector("text=Price") or await page.query_selector("text=Asking Price")
-                        if price_elem:
-                            parent = await price_elem.query_selector("xpath=..")
-                            if parent:
-                                price_text = await parent.inner_text()
+                    price_elem = await page.query_selector(".price, .starting-bid, .current-bid, [itemprop='price']")
+                    if price_elem:
+                        price_text = await price_elem.inner_text()
 
                 current_bid = 0.0
                 if price_text:
@@ -115,12 +112,21 @@ class EquipNetAdapter(BaseAuctionAdapter):
                     if price_match:
                         current_bid = float(price_match.group(1))
 
-                # Status Logic: Use word boundaries to avoid matching "closing" or "end times"
-                content = (await page.content()).lower()
+                # Status Logic: Prioritize parsed date over keywords
                 status = "active"
-                if re.search(r"\b(closed|ended|sold|expired)\b", content) or "no longer available" in content:
-                    status = "expired"
-
+                if closing_time_iso:
+                    from datetime import datetime, timezone
+                    try:
+                        ct = datetime.fromisoformat(closing_time_iso.replace("Z", "+00:00"))
+                        if ct < datetime.now(timezone.utc):
+                            status = "expired"
+                    except:
+                        pass
+                else:
+                    # Only fallback to keywords if no date was found
+                    content = (await page.content()).lower()
+                    if re.search(r"\b(closed|ended|sold|expired)\b", content) or "no longer available" in content:
+                        status = "expired"
 
                 # Standardized Return
                 return {
@@ -129,9 +135,10 @@ class EquipNetAdapter(BaseAuctionAdapter):
                     "closing_time": closing_time_iso,
                     "city": location_text,
                     "url": url,
-                    "site_key": "equipnet",
+                    "website_name": "EquipNet",
                     "status": status
                 }
+
 
             except (PlaywrightError, asyncio.TimeoutError) as e:
                 logger.error("[EquipNet] Fetch error: %s", e)
