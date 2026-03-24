@@ -129,9 +129,16 @@ class DatabaseLayer:
             "locked_until": None  # Always release lock
         }
         
+        # Defensive cleaning: Convert empty strings to None for timestamp columns
+        ts_keys = ["closing_time", "next_fetch_at", "last_scraped_at", "locked_until"]
+        for k in ts_keys:
+            if k in payload and payload[k] == "":
+                payload[k] = None
+
         await asyncio.to_thread(
             self.supabase.table("auction_items").update(payload).eq("id", item_id).execute
         )
+
 
     async def update_item_failure(self, item_id: str, error_message: str):
         """

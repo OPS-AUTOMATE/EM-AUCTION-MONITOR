@@ -64,32 +64,33 @@ class EquipNetAdapter(BaseAuctionAdapter):
                 closing_elem = await page.query_selector("text=Lots Begin Closing:")
                 if closing_elem:
                     closing_full_text = await closing_elem.inner_text()
-                    if "Lots Begin Closing:" in closing_full_text:
-                        raw_date_str = closing_full_text.split("Lots Begin Closing:")[1].strip()
-                        # Parse EquipNet date (e.g., "March 26, 2026 4:00 PM EST") into standardized UTC
-                        try:
-                            # Specific mapping for common EquipNet timezones
-                            tz_map = {
-                                "EST": pytz.timezone("America/New_York"),
-                                "EDT": pytz.timezone("America/New_York"),
-                                "BST": pytz.timezone("Europe/London"),
-                                "GMT": pytz.UTC
-                            }
-                            # dateutil is robust with EST/EDT parsing if we provide info
-                            dt = date_parser.parse(raw_date_str, fuzzy=True)
-                            
-                            # If timezone was at the end of the string, dateutil might miss it or use local.
-                            # We detect if string ends with common codes.
-                            for code, tz in tz_map.items():
-                                if raw_date_str.strip().endswith(code):
-                                    dt = tz.normalize(tz.localize(dt.replace(tzinfo=None)))
-                                    break
-                            
-                            # Standardize to UTC for DB persistence
-                            closing_time_iso = dt.astimezone(pytz.UTC).isoformat()
-                        except Exception as e:
-                            logger.error("[EquipNet] Failed to parse date %s: %s", raw_date_str, e)
-                            closing_time_iso = raw_date_str # Fallback to raw
+                    # Use regex to be more flexible with whitespace/labels
+                    match = re.search(r"Lots Begin Closing:\s*(.*)", closing_full_text, re.I)
+                    if match:
+                        raw_date_str = match.group(1).strip()
+                        if raw_date_str:
+                            # Parse EquipNet date (e.g., "March 26, 2026 4:00 PM EST") into standardized UTC
+                            try:
+                                tz_map = {
+                                    "EST": pytz.timezone("America/New_York"),
+                                    "EDT": pytz.timezone("America/New_York"),
+                                    "BST": pytz.timezone("Europe/London"),
+                                    "GMT": pytz.UTC
+                                }
+                                dt = date_parser.parse(raw_date_str, fuzzy=True)
+                                
+                                # Detect if string ends with common codes
+                                for code, tz in tz_map.items():
+                                    if code in raw_date_str:
+                                        dt = tz.normalize(tz.localize(dt.replace(tzinfo=None)))
+                                        break
+                                
+                                closing_time_iso = dt.astimezone(pytz.UTC).isoformat()
+                            except Exception as e:
+                                logger.error("[EquipNet] Failed to parse date %s: %s", raw_date_str, e)
+                                # Only set if valid string, otherwise None
+                                closing_time_iso = None
+
 
                 # Extract Price (Primary for Marketplace / Individual Lots)
                 price_text = ""
