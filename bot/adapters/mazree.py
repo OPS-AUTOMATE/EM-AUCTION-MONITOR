@@ -64,56 +64,53 @@ class MazreeAdapter(BaseAuctionAdapter):
                     logger.info("[Mazree] Attempting login flow with: %s", email)
                     await page.goto("https://www.mazree.com/SignIn", wait_until="networkidle")
                     
+                    # 1. Email Entry
                     email_field = page.locator("#email")
                     await email_field.wait_for(state="visible", timeout=15000)
-                    
-                    # Human-like typing
                     await email_field.click()
                     await email_field.clear()
                     await email_field.type(email, delay=100)
+                    await email_field.press("Tab") # Trigger Angular validation
+                    await asyncio.sleep(1)
                     
-                    # Trigger validation by tabbing or blurring
-                    await email_field.press("Tab")
-                    await asyncio.sleep(2)
-                    
-                    next_btn = page.locator('button:has-text("Next"), button[label="Next"]')
+                    # 2. Click Next
+                    next_btn = page.locator('button:has-text("Next")')
                     await next_btn.wait_for(state="visible", timeout=10000)
-
-                    # Check if disabled and try to force if needed
-                    is_disabled = await next_btn.get_attribute("disabled") is not None
-                    if is_disabled:
-                        logger.warning("[Mazree] Next button disabled after typing, attempting Enter key press...")
+                    
+                    if await next_btn.is_disabled():
+                        logger.warning("[Mazree] Next button disabled after typing, trying Enter key force...")
                         await email_field.focus()
                         await page.keyboard.press("Enter")
                     else:
                         await next_btn.click()
                     
-                    # Wait for password field
+                    # 3. Password Entry
+                    pw_field = page.locator("#password")
                     try:
-                        pw_field = page.locator('input[type="password"]')
-                        await pw_field.wait_for(state="visible", timeout=15000)
-                        logger.info("[Mazree] Email accepted, entering password...")
-                        await pw_field.fill(pw)
-                        await pw_field.press("Enter")
+                        await pw_field.wait_for(state="visible", timeout=10000)
+                        logger.info("[Mazree] Entering password...")
+                        await pw_field.click()
+                        await pw_field.clear()
+                        await pw_field.type(pw, delay=100)
+                        
+                        # 4. Sign In
+                        signin_btn = page.locator('button:has-text("Sign In")')
+                        await signin_btn.wait_for(state="visible", timeout=10000)
+                        await signin_btn.click()
                     except (PlaywrightError, Exception):
-                        # Maybe we are already on password page or it failed
-                        if await page.locator("text=Incorrect email or password").count() > 0:
-                            logger.error("[Mazree] Login validation failed (email likely invalid)")
+                        # Fallback if password field didn't show up
+                        logger.warning("[Mazree] Password field transition delayed, checking if logged in or blocked...")
+                        if await page.locator("text=Incorrect email").count() > 0:
+                            logger.error("[Mazree] Invalid email provided.")
                             return False
-                        # Try one more click on next if still on email page
-                        if await next_btn.is_visible():
-                            await next_btn.click(force=True)
-                            await asyncio.sleep(2)
-                            pw_field = page.locator('input[type="password"]')
-                            if await pw_field.count() > 0:
-                                await pw_field.fill(pw)
-                                await pw_field.press("Enter")
 
+                    # 5. Verify Success
                     await page.wait_for_selector('button:has-text("Sign Out"), .app-container', timeout=20000)
                     await context.storage_state(path=STORAGE_PATH)
                     logger.info("[Mazree] Login successful.")
                     return True
                 except (PlaywrightError, Exception) as e:
+                    logger.info("[Mazree] Login diagnostic: URL=%s", page.url)
                     logger.error("[Mazree] Login failed during flow: %s", e)
                 return False
 
