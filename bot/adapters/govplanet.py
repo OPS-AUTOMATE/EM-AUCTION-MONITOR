@@ -79,31 +79,45 @@ class GovPlanetAdapter(BaseAuctionAdapter):
                 item_name = await get_text_safe('h1.itemdesc, h1')
 
                 # 2. Location
-                location = await get_text_safe('xpath=//*[contains(@class, "label") and contains(translate(.), "location", "LOCATION"), "LOCATION")]/following-sibling::*[contains(@class, "value")]')
+                # Improved XPath and backups
+                location = await get_text_safe('xpath=//*[contains(@class, "label") and contains(translate(text(), "location", "LOCATION"), "LOCATION")]/following-sibling::*[contains(@class, "value")]')
                 if not location:
-                    location = await get_text_safe('.location, [itemprop="availableAtOrFrom"], .item-location')
+                    location = await get_text_safe(".location, .item-location, [itemprop='availableAtOrFrom']")
+                if not location:
+                    # Try finding by text and getting sibling
+                    loc_label = await page.query_selector("text=Location")
+                    if loc_label:
+                        parent = await loc_label.evaluate_handle("el => el.parentElement")
+                        if parent:
+                            location = (await parent.inner_text()).replace("Location", "").strip()
 
                 # 3. No. of Bids
                 bids_selector = f'[id="IP${item_id}_bidcountItemstring"]' if item_id else '[id*="_bidcountItemstring"]'
-                bids_text = await get_text_safe(bids_selector)
+                bids_text = await get_text_safe(bids_selector) or await get_text_safe("text=# of Bids")
 
                 # 4. Auction Date/Time
                 time_text = await get_text_safe(f'[id="IP${item_id}_timeBox"]' if item_id else '[id*="_timeBox"]')
 
                 # 5. Price
-                price_selector = f'[id="IP${item_id}_price"]' if item_id else '[id*="_price"], .current-bid, .price'
+                price_selector = f'[id="IP${item_id}_price"]' if item_id else '[id*="_price"], .current-bid, .price, .winning-bid'
                 price_text = await get_text_safe(price_selector)
+                if not price_text:
+                    price_text = await get_text_safe("text=Winning Bid") or await get_text_safe("text=Current Bid")
 
                 current_bid = 0.0
                 if price_text:
-                    clean_bid = re.sub(r'[^\d.]', '', price_text)
-                    if clean_bid:
-                        current_bid = float(clean_bid)
+                    # Remove "Winning Bid" or "Current Bid" labels if they were captured
+                    clean_price = re.sub(r'(Winning|Current)\s*Bid:?', '', price_text, flags=re.I)
+                    clean_price = re.sub(r'[^\d.]', '', clean_price.replace(",", ""))
+                    if clean_price:
+                        current_bid = float(clean_price)
 
                 # Location Parsing
                 city, state = "Unknown", "Unknown"
                 if location:
-                    clean_loc = re.sub(r',\s*United States.*$', '', location, flags=re.I).strip()
+                    # Example: "North Las Vegas, Nevada, United States. 89030"
+                    clean_loc = re.sub(r'United States.*$', '', location, flags=re.I).strip()
+                    clean_loc = clean_loc.rstrip(',. ')
                     parts = [p.strip() for p in clean_loc.split(',')]
                     if len(parts) >= 2:
                         city, state = parts[0], parts[1]
@@ -133,6 +147,18 @@ class GovPlanetAdapter(BaseAuctionAdapter):
                     except (ImportError, ValueError, OverflowError):
                         pass
 
+                # 7. Status Logic
+                page_content = (await page.content()).lower()
+                status = "active"
+                if any(kw in page_content for kw in ["sold!", "winning bid", "bidding closed", "auction ended"]):
+                    status = "expired"
+                
+                # Check Standalone 'sold' word boundary
+                if status == "active" and re.search(r"\bsold\b", page_content):
+                    # Double check it's not "item will be sold" or something
+                    if "sold on" in page_content or "winning bid" in page_content:
+                        status = "expired"
+
                 return {
                     "item_name": item_name[:200] if item_name else "Unknown",
                     "current_bid": current_bid,
@@ -142,8 +168,9 @@ class GovPlanetAdapter(BaseAuctionAdapter):
                     "time_remaining_str": time_text or "",
                     "closing_time": closing_time_iso,
                     "website_name": "GovPlanet",
-                    "status": "active"
+                    "status": status
                 }
+
 
             except (PlaywrightError, asyncio.TimeoutError) as e:
                 logger.error("[GovPlanet] Fetch failure: %s", e)
