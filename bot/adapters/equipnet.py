@@ -115,11 +115,12 @@ class EquipNetAdapter(BaseAuctionAdapter):
                     if price_match:
                         current_bid = float(price_match.group(1))
 
-                # Status Logic
+                # Status Logic: Use word boundaries to avoid matching "closing" or "end times"
                 content = (await page.content()).lower()
                 status = "active"
-                if any(x in content for x in ["closed", "ended", "sold"]):
+                if re.search(r"\b(closed|ended|sold|expired)\b", content) or "no longer available" in content:
                     status = "expired"
+
 
                 # Standardized Return
                 return {

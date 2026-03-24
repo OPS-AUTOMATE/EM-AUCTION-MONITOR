@@ -122,11 +122,12 @@ class AllSurplusAdapter(BaseAuctionAdapter):
                     except: 
                         logger.error("[AllSurplus] Date parse failed for: %s", time_text)
 
-                # 5. Status
+                # Status Logic: Use word boundaries to avoid matching "closing" or "end times"
                 page_content_lower = (await page.content()).lower()
                 status = "active"
-                if any(x in page_content_lower for x in ["closed", "sold", "ended", "no longer available"]):
+                if re.search(r"\b(closed|ended|sold|expired)\b", page_content_lower) or "no longer available" in page_content_lower:
                     status = "expired"
+
 
                 return {
                     "item_name": item_name[:200],
