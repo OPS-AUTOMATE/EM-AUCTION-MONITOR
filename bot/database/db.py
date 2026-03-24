@@ -203,8 +203,9 @@ class DatabaseLayer:
         now = datetime.now(timezone.utc)
         
         if not closing_time_iso:
-            # RETRY MODE: If first scrape failed or missing date, retry every 5 mins
-            return FetchTier.NORMAL, now + timedelta(minutes=5)
+            # Marketplace/Persistent Listing Mode: Since there's no countdown timer,
+            # we refresh every 6 hours (21,600s) to catch infrequent price or status updates.
+            return FetchTier.NORMAL, now + timedelta(hours=6)
             
         try:
             # Force timezone awareness to prevent naive/aware subtraction crashes
