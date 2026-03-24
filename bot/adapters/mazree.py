@@ -7,7 +7,7 @@ import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, cast
 
 from playwright.async_api import async_playwright, Error as PlaywrightError
 from utils.browser import launch_browser
@@ -135,7 +135,7 @@ class MazreeAdapter(BaseAuctionAdapter):
 
                 # Item Name extraction
                 raw_name = await get_text("h3.text-4xl") or await get_text("h3") or await get_text("h1")
-                extracted_item_name: str = str(raw_name or "Unknown Item")
+                extracted_item_name = str(raw_name) if raw_name else "Unknown Item"
                 
                 # Bid/Price Extraction
                 price_text = ""
@@ -195,7 +195,7 @@ class MazreeAdapter(BaseAuctionAdapter):
                     closing_time_iso = (datetime.now(timezone.utc) + timedelta(seconds=total_s)).isoformat()
 
                 return {
-                    "item_name": extracted_item_name[:200],
+                    "item_name": cast(str, extracted_item_name)[:200],
                     "current_bid": current_bid,
                     "city": city,
                     "state": state,

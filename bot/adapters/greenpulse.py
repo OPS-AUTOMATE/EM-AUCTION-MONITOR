@@ -5,7 +5,7 @@ Extracts listing details for medical asset remarketing.
 import asyncio
 import logging
 import re
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, cast
 
 from playwright.async_api import async_playwright, Error as PlaywrightError
 from utils.browser import launch_browser
@@ -54,7 +54,8 @@ class GreenPulseAdapter(BaseAuctionAdapter):
                     try:
                         loc = page.locator(sel).first
                         if await loc.count() > 0:
-                            item_name = (await loc.inner_text()).strip()
+                            extracted_text = await loc.inner_text()
+                            item_name = str(extracted_text).strip()
                             break
                     except (PlaywrightError, Exception):
                         continue
@@ -81,7 +82,7 @@ class GreenPulseAdapter(BaseAuctionAdapter):
                     status = "expired"
 
                 return {
-                    "item_name": item_name[:200],
+                    "item_name": cast(str, item_name)[:200],
                     "current_bid": current_bid,
                     "website_name": "Green Pulse",
                     "status": status
