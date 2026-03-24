@@ -43,7 +43,10 @@ class MazreeAdapter(BaseAuctionAdapter):
                 "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
             }
             if os.path.exists(STORAGE_PATH):
+                logger.info("[Mazree] Loading existing session from: %s", STORAGE_PATH)
                 context_args["storage_state"] = STORAGE_PATH
+            else:
+                logger.warning("[Mazree] No session file found at: %s", STORAGE_PATH)
 
             context = await browser.new_context(**context_args)
             page = await context.new_page()
@@ -216,18 +219,33 @@ class MazreeAdapter(BaseAuctionAdapter):
                 status = "active"
                 time_str = await get_text("i.fa-clock + *") or await get_text("span:has-text('Ends In') + span")
                 closing_time_iso = None
-                
-                page_content_lower = (await page.content()).lower()
-                if re.search(r'\b(closed|sold|ended|expired|winning)\b', page_content_lower):
-                    status = "expired"
 
-                elif time_str:
-                    d, h, m, s = 0, 0, 0, 0
-                    if mt := re.search(r'(\d+)\s*D', time_str, re.I): d = int(mt.group(1))
-                    if mt := re.search(r'(\d+)\s*H', time_str, re.I): h = int(mt.group(1))
-                    if mt := re.search(r'(\d+)\s*M', time_str, re.I): m = int(mt.group(1))
-                    total_s = (d * 86400) + (h * 3600) + (m * 60)
-                    closing_time_iso = (datetime.now(timezone.utc) + timedelta(seconds=total_s)).isoformat()
+                # Targeted Status Badge Detection
+                status_badge = await page.query_selector("span.badge, .inventory-status-active, .inventory-status-closed")
+                if status_badge:
+                    badge_text = (await status_badge.inner_text()).upper()
+                    if any(x in badge_text for x in ["IN PROGRESS", "ACTIVE", "OPEN"]):
+                        status = "active"
+                    elif any(x in badge_text for x in ["ENDED", "CLOSED", "SOLD", "EXPIRED"]):
+                        status = "expired"
+
+                # Parse time_str to get closing_time and confirm ACTIVE status
+                if time_str:
+                    try:
+                        d, h, m, s = 0, 0, 0, 0
+                        if mt := re.search(r'(\d+)\s*D', time_str, re.I): d = int(mt.group(1))
+                        if mt := re.search(r'(\d+)\s*H', time_str, re.I): h = int(mt.group(1))
+                        if mt := re.search(r'(\d+)\s*M', time_str, re.I): m = int(mt.group(1))
+                        if mt := re.search(r'(\d+)\s*S', time_str, re.I): s = int(mt.group(1))
+                        
+                        total_s = (d * 86400) + (h * 3600) + (m * 60) + s
+                        if total_s > 0:
+                            closing_time_iso = (datetime.now(timezone.utc) + timedelta(seconds=total_s)).isoformat()
+                            # If there's time remaining, it's definitively ACTIVE
+                            status = "active"
+                            logger.info("[Mazree] Confirmed ACTIVE status via countdown: %s", time_str)
+                    except Exception as e:
+                        logger.warning("[Mazree] Could not parse time string '%s': %s", time_str, e)
 
                 return {
                     "item_name": f"{extracted_item_name or 'Unknown Item'}"[:200],
