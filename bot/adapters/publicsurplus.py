@@ -1,27 +1,33 @@
+"""
+Public Surplus Adapter Module.
+Extracts listing details for government and surplus auctions.
+"""
 import asyncio
 import logging
 import re
 from typing import Optional, Dict, Any
-from playwright.async_api import async_playwright
-from .base_adapter import BaseAuctionAdapter
+
+from playwright.async_api import async_playwright, Error as PlaywrightError
 from utils.browser import launch_browser
+
+from .base_adapter import BaseAuctionAdapter
 
 logger = logging.getLogger(__name__)
 
 class PublicSurplusAdapter(BaseAuctionAdapter):
     """
     Hardened Public Surplus Adapter (Tier B - Playwright).
-    Highly deterministic extraction for high-volume government auctions.
+    Handles government surplus auctions with standardized extraction patterns.
     """
 
     async def fetch(self, url: str, preferred_method: int = 0) -> Optional[Dict[str, Any]]:
         async with async_playwright() as p:
-            # Proxy Rotation
-            launch_opts = {"headless": True}
+            # Proxy & Browser Configuration
+            launch_opts: Dict[str, Any] = {"headless": True}
             proxy_conf = self.get_proxy_config()
             if proxy_conf:
                 launch_opts["proxy"] = proxy_conf
-                logger.info(f"[PublicSurplus] Using Proxy: {proxy_conf['server']}")
+                logger.info("[PublicSurplus] Using Proxy: %s", proxy_conf['server'])
 
             browser = await launch_browser(p, **launch_opts)
             context = await browser.new_context(
@@ -30,49 +36,37 @@ class PublicSurplusAdapter(BaseAuctionAdapter):
             page = await context.new_page()
             
             try:
-                logger.info(f"[PublicSurplus] Fetching: {url}")
+                logger.info("[PublicSurplus] Fetching: %s", url)
                 await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                
-                # Public Surplus often has a lot of content, wait for the core auction title
-                await page.wait_for_selector('.auction-title, h1, #auctionTitle', timeout=15000)
-                await asyncio.sleep(4) # Stabilization
+                await asyncio.sleep(3)
+
+                async def get_text(sel: str) -> str:
+                    try:
+                        loc = page.locator(sel).first
+                        return (await loc.inner_text()).strip() if await loc.count() > 0 else ""
+                    except: return ""
 
                 # 1. Item Name
-                item_name = "Unknown Item"
-                name_selectors = ['.auction-title', 'h1', '#auctionTitle']
-                for sel in name_selectors:
-                    if await page.locator(sel).count() > 0:
-                        item_name = await page.locator(sel).first.inner_text()
-                        break
+                item_name = await get_text(".auction-title") or await get_text("h1") or "Unknown Item"
                 
                 # 2. Bid Extraction
-                current_bid = 0.0
-                price_selectors = ['.current-bid', '.amount', '#currentBid', '.price']
-                for sel in price_selectors:
-                    if await page.locator(sel).count() > 0:
-                        bid_text = await page.locator(sel).first.inner_text()
-                        try:
-                            clean_bid = re.sub(r'[^\d.]', '', bid_text)
-                            if clean_bid:
-                                current_bid = float(clean_bid)
-                                break
-                        except: continue
+                bid_text = await get_text(".current-bid") or await get_text("#currentBid")
+                current_bid = float(re.sub(r'[^\d.]', '', bid_text)) if bid_text and re.sub(r'[^\d.]', '', bid_text) else 0.0
 
-                # 3. Location
+                # 3. Location (Regex from HTML content)
                 city, state = "Unknown", "Unknown"
-                # Public Surplus usually has location labels
-                loc_text_all = await page.content()
-                loc_match = re.search(r"Location:\s*</b>\s*([^<,]+),\s*([A-Z]{2})", loc_text_all, re.I)
-                if loc_match:
-                    city, state = loc_match.group(1).strip(), loc_match.group(2).strip()
+                content = await page.content()
+                match = re.search(r"Location:\s*</b>\s*([^<,]+),\s*([A-Z]{2})", content, re.I)
+                if match:
+                    city, state = match.group(1).strip(), match.group(2).strip()
 
                 # 4. Status Check
                 status = "active"
-                if "Auction Closed" in await page.content() or "Ended" in await page.content():
+                if any(x in content for x in ["Auction Closed", "Ended", "Sold"]):
                     status = "expired"
 
                 return {
-                    "item_name": item_name.strip()[:200],
+                    "item_name": item_name[:200],
                     "current_bid": current_bid,
                     "city": city,
                     "state": state,
@@ -80,8 +74,8 @@ class PublicSurplusAdapter(BaseAuctionAdapter):
                     "status": status
                 }
 
-            except Exception as e:
-                logger.error(f"[PublicSurplus] Error: {e}")
+            except (PlaywrightError, asyncio.TimeoutError) as e:
+                logger.error("[PublicSurplus] Fetch failure: %s", e)
                 return None
             finally:
                 await browser.close()

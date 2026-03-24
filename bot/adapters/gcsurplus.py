@@ -1,9 +1,16 @@
+"""
+GC Surplus Adapter Module.
+Extracts listing data from GC Surplus, including bilingual support and closing time logic.
+"""
 import asyncio
 import logging
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
-from playwright.async_api import async_playwright
+
+from playwright.async_api import async_playwright, Error as PlaywrightError
+from utils.browser import launch_browser
+
 from .base_adapter import BaseAuctionAdapter
 
 logger = logging.getLogger(__name__)
@@ -11,33 +18,33 @@ logger = logging.getLogger(__name__)
 class GCSurplusAdapter(BaseAuctionAdapter):
     """
     Hardened GC Surplus Adapter (Tier B - Playwright).
-    Handles bilingual (EN/FR) state and dynamic pricing.
+    Handles EN/FR bilingual states and complex closing time parsing.
     """
 
     async def fetch(self, url: str, preferred_method: int = 0) -> Optional[Dict[str, Any]]:
         async with async_playwright() as p:
-            # Proxy Rotation
-            launch_opts = {"headless": True}
+            # Proxy Configuration
+            launch_opts: Dict[str, Any] = {"headless": True}
             proxy_conf = self.get_proxy_config()
             if proxy_conf:
                 launch_opts["proxy"] = proxy_conf
-                logger.info(f"[GCSurplus] Using Proxy: {proxy_conf['server']}")
+                logger.info("[GCSurplus] Using Proxy: %s", proxy_conf['server'])
 
-            browser = await p.chromium.launch(**launch_opts)
+            browser = await launch_browser(p, **launch_opts)
             context = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
             )
             page = await context.new_page()
             
             try:
-                logger.info(f"[GCSurplus] Fetching: {url}")
+                logger.info("[GCSurplus] Fetching: %s", url)
                 await page.goto(url, wait_until="domcontentloaded", timeout=45000)
                 
-                # Wait for title to appear
+                # Wait for core UI elements
                 try:
                     await page.wait_for_selector('h1, #bidPanelId', timeout=15000)
-                except:
-                    logger.warning("[GCSurplus] Timeout waiting for selectors.")
+                except (PlaywrightError, asyncio.TimeoutError):
+                    logger.warning("[GCSurplus] Timeout waiting for content selectors.")
 
                 await asyncio.sleep(3) # Stabilization
 
@@ -46,8 +53,9 @@ class GCSurplusAdapter(BaseAuctionAdapter):
                    try:
                        loc = page.locator(f"xpath={selector}" if use_xpath else selector)
                        if await loc.count() > 0:
-                           return await loc.first.inner_text()
-                   except: pass
+                           return (await loc.first.inner_text()).strip()
+                   except (PlaywrightError, Exception): 
+                       pass
                    return ""
 
                 # 1. Item Name
@@ -64,11 +72,9 @@ class GCSurplusAdapter(BaseAuctionAdapter):
                 
                 current_bid = 0.0
                 if current_bid_text:
-                    try:
-                        clean_bid = re.sub(r'[^\d.]', '', current_bid_text)
-                        if clean_bid:
-                            current_bid = float(clean_bid)
-                    except: pass
+                    clean_bid = re.sub(r'[^\d.]', '', current_bid_text)
+                    if clean_bid:
+                        current_bid = float(clean_bid)
 
                 # 3. Time Remaining
                 time_remaining = await get_text_safe("#timeRemaining")
@@ -82,8 +88,7 @@ class GCSurplusAdapter(BaseAuctionAdapter):
 
                 city, state = "Unknown", ""
                 if location:
-                    # Clean trailing commas
-                    location = location.strip().rstrip(",")
+                    location = location.rstrip(",")
                     if "," in location:
                         parts = location.split(",")
                         city = parts[0].strip()
@@ -93,10 +98,8 @@ class GCSurplusAdapter(BaseAuctionAdapter):
 
                 # 5. Closing Date
                 closing_date = await get_text_safe("#closingDateId")
-                if not closing_date:
-                    closing_date = await get_text_safe("/html/body/div[3]/div/main/div[2]/form/div/div/div[6]/div[2]/section/div/div[1]/section/div/dl/dd[8]/span", use_xpath=True)
 
-                # Status Check: Hardened
+                # Status Check
                 status = "active"
                 content_lower = (await page.content()).lower()
                 if "closed" in content_lower or "fermé" in content_lower:
@@ -106,12 +109,11 @@ class GCSurplusAdapter(BaseAuctionAdapter):
                     if "closed" not in time_remaining.lower() and "fermé" not in time_remaining.lower():
                         status = "active"
 
-                # 6. Calculate ISO closing time for active auctions
+                # 6. Calculate ISO closing time
                 closing_time_iso = None
                 if status == "active" and time_remaining:
                     try:
                         days, hours, minutes, seconds = 0, 0, 0, 0
-                        # Try to handle formats like "3 Days 5 Hours" or "3 Jours 5 Heures"
                         if m := re.search(r'(\d+)\s*(Days?|Jours?)', time_remaining, re.I): days = int(m.group(1))
                         if m := re.search(r'(\d+)\s*(Hours?|Heures?)', time_remaining, re.I): hours = int(m.group(1))
                         if m := re.search(r'(\d+)\s*(Minutes?|Minutes?)', time_remaining, re.I): minutes = int(m.group(1))
@@ -120,31 +122,8 @@ class GCSurplusAdapter(BaseAuctionAdapter):
                         total_s = (days * 86400) + (hours * 3600) + (minutes * 60) + seconds
                         if total_s > 0:
                             closing_time_iso = (datetime.now(timezone.utc) + timedelta(seconds=total_s)).isoformat()
-                        
-                        # Fallback: Parse absolute closing_date (e.g., February 11, 2026, 3:20 p.m. EST)
-                        if not closing_time_iso and closing_date:
-                            try:
-                                # Clean common noise
-                                clean_dt = re.sub(r'\s+', ' ', closing_date).strip()
-                                # Simple format match (Month Day, Year, Time)
-                                # Handles: "February 11, 2026, 3:20 p.m."
-                                m = re.search(r'([a-zA-Z]+)\s+(\d+),\s+(\d{4}),\s+(\d+):(\d+)', clean_dt)
-                                if m:
-                                    mon_name, day, year, hr, mn = m.groups()
-                                    # Month mapping
-                                    mon_map = {"january":1,"february":2,"march":3,"april":4,"may":5,"june":6,"july":7,"august":8,"september":9,"october":10,"november":11,"december":12}
-                                    mon = mon_map.get(mon_name.lower(), 1)
-                                    
-                                    # Check for PM
-                                    is_pm = "p.m." in clean_dt.lower() or "pm" in clean_dt.lower()
-                                    hr_24 = int(hr)
-                                    if is_pm and hr_24 < 12: hr_24 += 12
-                                    if not is_pm and hr_24 == 12: hr_24 = 0
-                                    
-                                    dt = datetime(int(year), mon, int(day), hr_24, int(mn), tzinfo=timezone.utc)
-                                    closing_time_iso = dt.isoformat()
-                            except: pass
-                    except: pass
+                    except ValueError:
+                        pass
                 elif status == "expired":
                     closing_time_iso = datetime.now(timezone.utc).isoformat()
 
@@ -159,8 +138,8 @@ class GCSurplusAdapter(BaseAuctionAdapter):
                     "status": status
                 }
 
-            except Exception as e:
-                logger.error(f"[GCSurplus] Error: {e}")
+            except (PlaywrightError, asyncio.TimeoutError) as e:
+                logger.error("[GCSurplus] Error: %s", e)
                 return None
             finally:
                 await browser.close()
