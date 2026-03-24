@@ -1,20 +1,27 @@
+"""
+IAMS Monitoring Engine - Heartbeat Service.
+Handles the main loop for tracking auction items, checking expiration,
+and scheduling worker tasks for data refresh.
+"""
 import asyncio
 import logging
 import os
 import sys
 from datetime import datetime, timezone
-from supabase import create_client
+from typing import Dict
+
 from dotenv import load_dotenv
+from supabase import create_client
+
+from database.db import DatabaseLayer
+from engine.scheduler import Scheduler
+from engine.worker import Worker
 
 # Load environment variables from .env file
 load_dotenv()
 
 # Add current directory to path for clean imports
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-from database.db import DatabaseLayer
-from engine.scheduler import Scheduler
-from engine.worker import Worker
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -26,7 +33,7 @@ logging.getLogger("postgrest").setLevel(logging.WARNING)
 
 async def run_monitoring_engine(poll_interval: int = 5):
     """
-    The Heartbeat of the system. 
+    The Heartbeat of the system.
     Optimized to reduce DB load and log noise.
     """
     # Auth & Client Initialization
@@ -41,33 +48,33 @@ async def run_monitoring_engine(poll_interval: int = 5):
     scheduler = Scheduler(supabase)
     worker = Worker(db, scheduler)
 
-    last_heartbeat_log = 0
-    last_cleanup = 0
-    
+    last_heartbeat_log = 0.0
+    last_cleanup = 0.0
+
     # Simple State Tracker: {item_id: status}
-    previous_states = {}
+    previous_states: Dict[str, str] = {}
 
     while True:
         try:
             now_ts = datetime.now().timestamp()
-            
+
             try:
                 now_utc = datetime.now(timezone.utc)
                 # fetch_all_items_minimal is already threaded now
                 all_items = await db.fetch_all_items_minimal()
                 current_ids = {item['id'] for item in all_items}
-                
+
                 # 1. Detect and log DELETIONS
                 deleted_ids = set(previous_states.keys()) - current_ids
                 for d_id in deleted_ids:
-                    logger.info(f"Item {d_id[:8]} DELETED from system. Stopping monitor.")
+                    logger.info("Item %s DELETED from system. Stopping monitor.", d_id[:8])
                     del previous_states[d_id]
 
                 for item in all_items:
                     item_id, current_status = item['id'], item['status']
                     closing_time_str = item.get('closing_time')
                     prev_status = previous_states.get(item_id)
-                    
+
                     # 2. AUTO-EXPIRATION CHECK (Works even if Paused)
                     locked_until = item.get('locked_until')
                     is_locked = False
@@ -75,27 +82,29 @@ async def run_monitoring_engine(poll_interval: int = 5):
                         try:
                             if datetime.fromisoformat(locked_until.replace("Z", "+00:00")) > now_utc:
                                 is_locked = True
-                        except: pass
+                        except Exception:
+                            pass
 
                     if current_status != 'expired' and closing_time_str and not is_locked:
                         try:
                             ct = datetime.fromisoformat(closing_time_str.replace("Z", "+00:00"))
                             if ct < now_utc:
-                                logger.info(f"Item {item_id[:8]} has EXPIRED based on clock. Updating status.")
+                                logger.info("Item %s has EXPIRED based on clock. Updating status.", item_id[:8])
                                 # Use threaded update
                                 await asyncio.to_thread(
                                     supabase.table("auction_items").update({"status": "expired"}).eq("id", item_id).execute
                                 )
                                 current_status = 'expired'
-                        except: pass
-                    
+                        except Exception:
+                            pass
+
                     # 3. STATUS CHANGED (or NEW ITEM)
                     if prev_status != current_status:
                         if prev_status is not None:
-                            logger.info(f"Item {item_id[:8]} state: {prev_status} -> {current_status}")
+                            logger.info("Item %s state change: %s -> %s", item_id[:8], prev_status, current_status)
                         else:
-                            logger.info(f"Item {item_id[:8]} ADDED to monitor.")
-                        
+                            logger.info("Item %s ADDED to monitor.", item_id[:8])
+
                         # If user toggled to active OR it's a new active item, force fetch
                         if current_status == 'active':
                             await asyncio.to_thread(
@@ -104,13 +113,13 @@ async def run_monitoring_engine(poll_interval: int = 5):
                                     "locked_until": None
                                 }).eq("id", item_id).execute
                             )
-                    
+
                     previous_states[item_id] = current_status
             except Exception as e:
                 if "ConnectionTerminated" in str(e) or "SSL" in str(e):
-                    logger.warning(f"Database connection hiccup in State Tracker: {e}. Retrying in 5s...")
+                    logger.warning("Database connection hiccup in State Tracker: %s. Retrying in 5s...", e)
                 else:
-                    logger.error(f"State Tracker Error: {e}")
+                    logger.error("State Tracker Error: %s", e)
                 await asyncio.sleep(5)
 
             # 1. Periodic Cleanup (Every 1 hour)
@@ -126,13 +135,13 @@ async def run_monitoring_engine(poll_interval: int = 5):
                 if now_ts - last_heartbeat_log > 600:
                     logger.info("System Heartbeat: Engine Spinning (No items due).")
                     last_heartbeat_log = now_ts
-                
-                await asyncio.sleep(2) 
+
+                await asyncio.sleep(poll_interval)
                 continue
 
             # Reset heartbeat log timer if we're actually processing
             last_heartbeat_log = now_ts
-            logger.info(f"Detected {len(due_items)} items due for refresh. Processing batch...")
+            logger.info("Detected %d items due for refresh. Processing batch...", len(due_items))
 
             # 3. Process batch with total batch timeout protection
             tasks = [worker.process_item(item, f"worker-{i}") for i, item in enumerate(due_items)]
@@ -145,7 +154,7 @@ async def run_monitoring_engine(poll_interval: int = 5):
             await asyncio.sleep(1)
 
         except Exception as e:
-            logger.error(f"Engine Loop Error: {e}")
+            logger.error("Engine Loop Error: %s", e)
             await asyncio.sleep(poll_interval)
 
 if __name__ == "__main__":
@@ -155,4 +164,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logger.info("Engine stopped by user.")
     except Exception as e:
-        logger.critical(f"System crash: {e}")
+        logger.critical("System crash: %s", e)

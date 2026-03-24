@@ -5,6 +5,7 @@ from typing import Optional, Dict, Any
 from datetime import datetime, timedelta, timezone
 from playwright.async_api import async_playwright
 from .base_adapter import BaseAuctionAdapter
+from utils.browser import launch_browser
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ class BidspotterAdapter(BaseAuctionAdapter):
                 launch_opts["proxy"] = proxy_conf
                 logger.info(f"[Bidspotter] Using Proxy: {proxy_conf['server']}")
 
-            browser = await p.chromium.launch(**launch_opts)
+            browser = await launch_browser(p, **launch_opts)
             context = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
             )

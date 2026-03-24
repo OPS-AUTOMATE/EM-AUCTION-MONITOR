@@ -9,6 +9,7 @@ from playwright.async_api import async_playwright
 import playwright_stealth
 from .base_adapter import BaseAuctionAdapter
 from utils.proxy_manager import ProxyManager
+from utils.browser import launch_browser
 import urllib.parse
 
 logger = logging.getLogger(__name__)
@@ -257,7 +258,7 @@ class GsaAdapter(BaseAuctionAdapter):
                     else:
                         logger.info("[GSA-Browser] Attempting DIRECT connection...")
 
-                    browser = await p_engine.chromium.launch(**launch_opts)
+                    browser = await launch_browser(p_engine, **launch_opts)
                     context = await browser.new_context(
                         user_agent=profile["ua"],
                         viewport=profile["viewport"],

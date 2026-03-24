@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from playwright.async_api import async_playwright
 from .base_adapter import BaseAuctionAdapter
+from utils.browser import launch_browser
 
 logger = logging.getLogger(__name__)
 
@@ -19,14 +20,6 @@ class CenturionAdapter(BaseAuctionAdapter):
             # Prepare Launch Options
             launch_options = {
                 "headless": True,
-                "args": [
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-infobars",
-                    "--disable-dev-shm-usage",
-                    "--disable-browser-side-navigation",
-                    "--disable-gpu"
-                ]
             }
 
             # GLOBAL PROXY (via BaseAdapter)
@@ -36,7 +29,7 @@ class CenturionAdapter(BaseAuctionAdapter):
                 server_safe = proxy_conf['server'].split('@')[-1] if '@' in proxy_conf['server'] else proxy_conf['server']
                 logger.info(f"[Centurion] Using Proxy: {server_safe}")
 
-            browser = await p.chromium.launch(**launch_options)
+            browser = await launch_browser(p, **launch_options)
             
             # Default values
             item_name = "Unknown Item"

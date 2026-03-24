@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from playwright.async_api import async_playwright
 from .base_adapter import BaseAuctionAdapter
+from utils.browser import launch_browser
 
 import os
 
@@ -29,7 +30,7 @@ class MazreeAdapter(BaseAuctionAdapter):
                 launch_opts["proxy"] = proxy_conf
                 logger.info(f"[Mazree] Using Proxy: {proxy_conf['server']}")
 
-            browser = await p.chromium.launch(**launch_opts)
+            browser = await launch_browser(p, **launch_opts)
             
             # SESSION PERSISTENCE
             context_args = {
@@ -250,10 +251,18 @@ class MazreeAdapter(BaseAuctionAdapter):
                         status = "active"
                         try:
                             d, h, m, s = 0, 0, 0, 0
-                            if "Day" in time_remaining_str: d = int(re.search(r'(\d+)\s*Day', time_remaining_str, re.I).group(1))
-                            if "Hour" in time_remaining_str: h = int(re.search(r'(\d+)\s*Hour', time_remaining_str, re.I).group(1))
-                            if "Minute" in time_remaining_str: m = int(re.search(r'(\d+)\s*Minute', time_remaining_str, re.I).group(1))
-                            if "Second" in time_remaining_str: s = int(re.search(r'(\d+)\s*Second', time_remaining_str, re.I).group(1))
+                            if "Day" in time_remaining_str:
+                                if match := re.search(r'(\d+)\s*Day', time_remaining_str, re.I):
+                                    d = int(match.group(1))
+                            if "Hour" in time_remaining_str:
+                                if match := re.search(r'(\d+)\s*Hour', time_remaining_str, re.I):
+                                    h = int(match.group(1))
+                            if "Minute" in time_remaining_str:
+                                if match := re.search(r'(\d+)\s*Minute', time_remaining_str, re.I):
+                                    m = int(match.group(1))
+                            if "Second" in time_remaining_str:
+                                if match := re.search(r'(\d+)\s*Second', time_remaining_str, re.I):
+                                    s = int(match.group(1))
                             
                             total_s = (d * 86400) + (h * 3600) + (m * 60) + s
                             if total_s > 0:

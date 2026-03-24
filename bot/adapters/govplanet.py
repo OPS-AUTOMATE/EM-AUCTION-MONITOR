@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from playwright.async_api import async_playwright
 from .base_adapter import BaseAuctionAdapter
+from utils.browser import launch_browser
 
 logger = logging.getLogger(__name__)
 
