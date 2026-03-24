@@ -139,26 +139,37 @@ class MazreeAdapter(BaseAuctionAdapter):
 
                 # Wait for the item title to be visible and not be the login title
                 # This prevents "Login to Mazree" from being scraped during transitions
-                max_retries = 2
+                max_retries = 3
                 extracted_item_name = "Unknown Item"
+                HOMEPAGE_TAGLINE = "The place to buy and sell used medical equipment."
                 
                 for attempt in range(max_retries):
                     # Try to wait for the actual item header
                     try:
-                        await page.wait_for_selector("h3.text-4xl, h3, h1", timeout=10000)
+                        await page.wait_for_selector("h3.text-4xl, h3, h1", timeout=15000)
                     except:
                         pass
                         
                     raw_name = await get_text("h3.text-4xl") or await get_text("h3") or await get_text("h1")
                     extracted_item_name = f"{raw_name or 'Unknown Item'}"
                     
-                    if "Login to Mazree" not in extracted_item_name and extracted_item_name != "Unknown Item":
+                    # Ensure we are not on the login page or the homepage tagline
+                    is_valid_title = (
+                        "Login to Mazree" not in extracted_item_name and 
+                        HOMEPAGE_TAGLINE not in extracted_item_name and 
+                        extracted_item_name != "Unknown Item"
+                    )
+                    
+                    # Also verify the URL pattern
+                    is_item_page = "listing-detail" in page.url
+
+                    if is_valid_title and is_item_page:
                         break
                     
                     if attempt < max_retries - 1:
-                        logger.info(f"[Mazree] Caught login page title '{extracted_item_name}', retrying navigation to item page...")
-                        await page.goto(url, wait_until="networkidle")
-                        await asyncio.sleep(3)
+                        logger.info(f"[Mazree] Attempt {attempt+1}: Title='{extracted_item_name[:50]}', URL={page.url}. Retrying navigation...")
+                        await page.goto(url, wait_until="networkidle", timeout=60000)
+                        await asyncio.sleep(8) # Heavier wait for Angular hydration on server
                 
                 # Bid/Price Extraction
                 price_text = ""
