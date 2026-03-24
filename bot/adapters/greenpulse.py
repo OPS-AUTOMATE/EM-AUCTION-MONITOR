@@ -82,7 +82,7 @@ class GreenPulseAdapter(BaseAuctionAdapter):
                     status = "expired"
 
                 return {
-                    "item_name": item_name[:200] if item_name else "Unknown Item",
+                    "item_name": f"{item_name or 'Unknown Item'}"[:200],
                     "current_bid": current_bid,
                     "website_name": "Green Pulse",
                     "status": status

@@ -195,7 +195,7 @@ class MazreeAdapter(BaseAuctionAdapter):
                     closing_time_iso = (datetime.now(timezone.utc) + timedelta(seconds=total_s)).isoformat()
 
                 return {
-                    "item_name": extracted_item_name[:200] if extracted_item_name else "Unknown Item",
+                    "item_name": f"{extracted_item_name or 'Unknown Item'}"[:200],
                     "current_bid": current_bid,
                     "city": city,
                     "state": state,
