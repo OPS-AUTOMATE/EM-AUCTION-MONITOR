@@ -10,6 +10,9 @@ from typing import Optional, Dict, Any
 from playwright.async_api import async_playwright, Error as PlaywrightError
 from utils.browser import launch_browser
 
+from dateutil import parser as date_parser
+import pytz
+
 from .base_adapter import BaseAuctionAdapter
 
 logger = logging.getLogger(__name__)
@@ -63,11 +66,30 @@ class EquipNetAdapter(BaseAuctionAdapter):
                     closing_full_text = await closing_elem.inner_text()
                     if "Lots Begin Closing:" in closing_full_text:
                         raw_date_str = closing_full_text.split("Lots Begin Closing:")[1].strip()
-                        # EquipNet format example: "March 26, 2026 4:00 PM EST"
-                        # Simple regex to extract date parts for basic ISO conversion if needed, 
-                        # but we'll try to keep the raw string or use a more robust parser if available.
-                        # For now, we'll keep it as a string for the DB to handle or use an easy-to-parse format.
-                        closing_time_iso = raw_date_str
+                        # Parse EquipNet date (e.g., "March 26, 2026 4:00 PM EST") into standardized UTC
+                        try:
+                            # Specific mapping for common EquipNet timezones
+                            tz_map = {
+                                "EST": pytz.timezone("America/New_York"),
+                                "EDT": pytz.timezone("America/New_York"),
+                                "BST": pytz.timezone("Europe/London"),
+                                "GMT": pytz.UTC
+                            }
+                            # dateutil is robust with EST/EDT parsing if we provide info
+                            dt = date_parser.parse(raw_date_str, fuzzy=True)
+                            
+                            # If timezone was at the end of the string, dateutil might miss it or use local.
+                            # We detect if string ends with common codes.
+                            for code, tz in tz_map.items():
+                                if raw_date_str.strip().endswith(code):
+                                    dt = tz.normalize(tz.localize(dt.replace(tzinfo=None)))
+                                    break
+                            
+                            # Standardize to UTC for DB persistence
+                            closing_time_iso = dt.astimezone(pytz.UTC).isoformat()
+                        except Exception as e:
+                            logger.error("[EquipNet] Failed to parse date %s: %s", raw_date_str, e)
+                            closing_time_iso = raw_date_str # Fallback to raw
 
                 # Extract Price (Primary for Marketplace / Individual Lots)
                 price_text = ""
