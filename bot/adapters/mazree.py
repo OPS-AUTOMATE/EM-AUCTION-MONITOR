@@ -121,8 +121,10 @@ class MazreeAdapter(BaseAuctionAdapter):
                 time_str = await get_text("i.fa-clock + *") or await get_text("span:has-text('Ends In') + span")
                 closing_time_iso = None
                 
-                if any(x in (await page.content()).lower() for x in ["closed", "sold", "ended"]):
+                page_content_lower = (await page.content()).lower()
+                if any(x in page_content_lower for x in ["closed", "sold", "ended"]):
                     status = "expired"
+
                 elif time_str:
                     d, h, m, s = 0, 0, 0, 0
                     if mt := re.search(r'(\d+)\s*D', time_str, re.I): d = int(mt.group(1))
