@@ -45,20 +45,35 @@ class EquipNetAdapter(BaseAuctionAdapter):
                 if title_elem:
                     item_name = (await title_elem.inner_text()).strip()
 
-                # Extract Price
+                # Extract Location (New Strategy)
+                location_text = "See Website"
+                location_elem = await page.query_selector("p:has-text('Location:')")
+                if location_elem:
+                    location_full_text = await location_elem.inner_text()
+                    if "Location:" in location_full_text:
+                        location_text = location_full_text.split("Location:")[1].strip()
+
+                # Extract Price (New Strategy)
                 price_text = ""
-                price_elem = await page.query_selector(".price-box, .product-price, .listing-price")
-                if not price_elem:
-                    price_elem = await page.query_selector("text=Price") or await page.query_selector("text=Asking Price")
-                    if price_elem:
-                        parent = await price_elem.query_selector("xpath=..")
-                        if parent:
-                            price_text = await parent.inner_text()
+                # Specific selector for EquipNet's greybox price
+                price_elem = await page.query_selector(".greybox h3")
+                if price_elem:
+                    price_text = await price_elem.inner_text()
+                
+                # Fallback to old selectors
+                if not price_text:
+                    price_elem = await page.query_selector(".price-box, .product-price, .listing-price")
+                    if not price_elem:
+                        price_elem = await page.query_selector("text=Price") or await page.query_selector("text=Asking Price")
+                        if price_elem:
+                            parent = await price_elem.query_selector("xpath=..")
+                            if parent:
+                                price_text = await parent.inner_text()
 
                 if not price_text and price_elem:
                     price_text = await price_elem.inner_text()
 
-                # Fallback for marketplace prices
+                # Fallback for marketplace prices (Gradients/H-tags)
                 if not price_text:
                     h_elems = await page.query_selector_all("h2, h3")
                     for h in h_elems:
@@ -69,17 +84,27 @@ class EquipNetAdapter(BaseAuctionAdapter):
 
                 current_bid = 0.0
                 if price_text:
-                    price_match = re.search(r"([\d,]+\.?\d*)", price_text.replace(",", ""))
+                    # Clean currency/commas to extract pure number
+                    clean_price = price_text.replace(",", "")
+                    price_match = re.search(r"([\d]+\.?\d*)", clean_price)
                     if price_match:
                         current_bid = float(price_match.group(1))
+
+                # Status Logic (Custom for EquipNet)
+                # Toggles to 'expired' if the page indicates it's closed or ended.
+                content = (await page.content()).lower()
+                status = "active"
+                if any(x in content for x in ["closed", "ended", "sold"]):
+                    status = "expired"
 
                 return {
                     "item_name": item_name,
                     "current_bid": current_bid,
-                    "closing_time": None,
-                    "city": "See Website",
+                    "closing_time": None, # EquipNet listings are often persistent marketplaces
+                    "city": location_text,
                     "url": url,
-                    "site_key": "equipnet"
+                    "site_key": "equipnet",
+                    "status": status
                 }
 
             except (PlaywrightError, asyncio.TimeoutError) as e:

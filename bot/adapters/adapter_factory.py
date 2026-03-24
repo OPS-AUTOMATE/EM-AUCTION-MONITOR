@@ -92,6 +92,11 @@ def detect_site_key(url: str) -> str:
         return "allsurplus"
     if host == "equipnet.com" or host.endswith(".equipnet.com"):
         return "equipnet"
+
+    # Deep fallback: Check if the name appears anywhere in the hostname
+    if "equipnet" in host:
+        return "equipnet"
+
     return "mock"
 
 def get_adapter(site_key: str) -> Optional[Type[BaseAuctionAdapter]]:

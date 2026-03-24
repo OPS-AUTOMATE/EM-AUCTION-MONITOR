@@ -19,12 +19,13 @@ class DatabaseLayer:
     async def fetch_due_items(self, limit: int = 10) -> List[Dict[str, Any]]:
         """
         Retrieves items that are due for a refresh. 
+        Fetches both 'active' items reaching their threshold and new 'pending_sync' items.
         """
         now = datetime.now(timezone.utc).isoformat()
         response = await asyncio.to_thread(
             self.supabase.table("auction_items").select("*")
-            .eq("status", "active")
-            .lte("next_fetch_at", now)
+            .or_("status.eq.active,status.eq.pending_sync")
+            .or_(f"next_fetch_at.is.null,next_fetch_at.lte.{now}")
             .or_(f"locked_until.is.null,locked_until.lte.{now}")
             .order("next_fetch_at")
             .limit(limit)
