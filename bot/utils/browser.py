@@ -26,10 +26,16 @@ async def launch_browser(p, **kwargs):
         "--disable-infobars",
         "--disable-browser-side-navigation",
     ]
-    default_args.extend(kwargs.pop('args', []))
+    
+    # Extract headless if provided, default to True
+    headless = kwargs.pop('headless', True)
+    
+    # Combine user args with defaults
+    user_args = kwargs.pop('args', [])
+    combined_args = list(set(default_args + user_args))
     
     return await p.chromium.launch(
-        headless=kwargs.get('headless', True),
-        args=default_args,
+        headless=headless,
+        args=combined_args,
         **kwargs
     )
