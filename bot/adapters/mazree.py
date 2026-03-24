@@ -136,8 +136,9 @@ class MazreeAdapter(BaseAuctionAdapter):
                         return (await loc.inner_text()).strip() if await loc.count() > 0 else ""
                     except: return ""
 
-                # Item Name
-                item_name = await get_text("h3.text-4xl") or await get_text("h3") or await get_text("h1") or "Unknown Item"
+                # Item Name extraction
+                raw_name = await get_text("h3.text-4xl") or await get_text("h3") or await get_text("h1")
+                extracted_item_name: str = str(raw_name or "Unknown Item")
                 
                 # Bid/Price Extraction
                 price_text = ""
@@ -197,7 +198,7 @@ class MazreeAdapter(BaseAuctionAdapter):
                     closing_time_iso = (datetime.now(timezone.utc) + timedelta(seconds=total_s)).isoformat()
 
                 return {
-                    "item_name": item_name[:200],
+                    "item_name": extracted_item_name[:200],
                     "current_bid": current_bid,
                     "city": city,
                     "state": state,
@@ -207,6 +208,7 @@ class MazreeAdapter(BaseAuctionAdapter):
                     "website_name": "Mazree",
                     "status": status
                 }
+
 
 
 
