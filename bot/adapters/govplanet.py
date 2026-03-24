@@ -79,21 +79,21 @@ class GovPlanetAdapter(BaseAuctionAdapter):
                 item_name = await get_text_safe('h1.itemdesc, h1')
 
                 # 2. Location
-                # Improved XPath and backups
-                location = await get_text_safe('xpath=//*[contains(@class, "label") and contains(translate(text(), "location", "LOCATION"), "LOCATION")]/following-sibling::*[contains(@class, "value")]')
+                # Inspected pattern: div with text 'LOCATION' followed by value div
+                location = await get_text_safe('xpath=//div[contains(text(), "LOCATION")]/following-sibling::div')
                 if not location:
-                    location = await get_text_safe(".location, .item-location, [itemprop='availableAtOrFrom']")
+                    location = await get_text_safe('xpath=//*[contains(text(), "Location")]/following-sibling::*')
                 if not location:
-                    # Try finding by text and getting sibling
-                    loc_label = await page.query_selector("text=Location")
-                    if loc_label:
-                        parent = await loc_label.evaluate_handle("el => el.parentElement")
-                        if parent:
-                            location = (await parent.inner_text()).replace("Location", "").strip()
+                    location = await get_text_safe(".location, .item-location, .item-stats div:nth-child(2)")
 
                 # 3. No. of Bids
                 bids_selector = f'[id="IP${item_id}_bidcountItemstring"]' if item_id else '[id*="_bidcountItemstring"]'
-                bids_text = await get_text_safe(bids_selector) or await get_text_safe("text=# of Bids")
+                bids_text = await get_text_safe(bids_selector)
+                if not bids_text:
+                    # Inspected pattern: div with text '# OF BIDS' followed by value div
+                    bids_text = await get_text_safe('xpath=//div[contains(text(), "# OF BIDS")]/following-sibling::div')
+                if not bids_text:
+                    bids_text = await get_text_safe("text=# of Bids")
 
                 # 4. Auction Date/Time
                 time_text = await get_text_safe(f'[id="IP${item_id}_timeBox"]' if item_id else '[id*="_timeBox"]')
@@ -102,11 +102,14 @@ class GovPlanetAdapter(BaseAuctionAdapter):
                 price_selector = f'[id="IP${item_id}_price"]' if item_id else '[id*="_price"], .current-bid, .price, .winning-bid'
                 price_text = await get_text_safe(price_selector)
                 if not price_text:
+                    # Try finding "Winning Bid" or "Current Bid" labels
+                    price_text = await get_text_safe('xpath=//div[contains(text(), "WINNING BID")]/following-sibling::div')
+                if not price_text:
                     price_text = await get_text_safe("text=Winning Bid") or await get_text_safe("text=Current Bid")
 
                 current_bid = 0.0
                 if price_text:
-                    # Remove "Winning Bid" or "Current Bid" labels if they were captured
+                    # Remove labels if they were captured
                     clean_price = re.sub(r'(Winning|Current)\s*Bid:?', '', price_text, flags=re.I)
                     clean_price = re.sub(r'[^\d.]', '', clean_price.replace(",", ""))
                     if clean_price:
@@ -155,7 +158,6 @@ class GovPlanetAdapter(BaseAuctionAdapter):
                 
                 # Check Standalone 'sold' word boundary
                 if status == "active" and re.search(r"\bsold\b", page_content):
-                    # Double check it's not "item will be sold" or something
                     if "sold on" in page_content or "winning bid" in page_content:
                         status = "expired"
 
@@ -170,6 +172,7 @@ class GovPlanetAdapter(BaseAuctionAdapter):
                     "website_name": "GovPlanet",
                     "status": status
                 }
+
 
 
             except (PlaywrightError, asyncio.TimeoutError) as e:
